@@ -37,9 +37,52 @@ ask_yn() {
     case "$answer" in ""|[Yy]|[Yy]es) return 0 ;; *) return 1 ;; esac
 }
 
+# y/N question, Enter = NO — for actions that should not happen by accident
+ask_ny() {
+    local answer
+    printf "%s%s%s [y/N] " "${BOLD}" "$1" "${RESET}" >&2
+    read -r answer </dev/tty || return 1
+    case "$answer" in [Yy]|[Yy]es) return 0 ;; *) return 1 ;; esac
+}
+
 OLLAMA_PORT=11434
 api_host() { echo "${OLLAMA_HOST:-127.0.0.1:${OLLAMA_PORT}}" | sed 's|^http://||;s|/$||'; }
 server_up() { curl -sf "http://$(api_host)/api/version" >/dev/null 2>&1; }
+
+# ---------- tuning settings (persisted; previous choice = next default) ------
+SETTINGS_FILE="$HOME/.aiModelLauncher.conf"
+tune_get() { [ -f "$SETTINGS_FILE" ] && sed -n "s/^$1=//p" "$SETTINGS_FILE" | tail -1; }
+tune_set() {
+    local tmp
+    tmp=$(grep -v "^$1=" "$SETTINGS_FILE" 2>/dev/null)
+    { [ -n "$tmp" ] && printf '%s\n' "$tmp"; printf '%s=%s\n' "$1" "$2"; } > "$SETTINGS_FILE"
+}
+
+# free-form question with a default; Enter = default. Echoes the answer.
+ask_val() {
+    local answer
+    printf "%s%s%s [%s]: " "${BOLD}" "$1" "${RESET}" "$2" >&2
+    read -r answer </dev/tty || { echo "$2"; return; }
+    echo "${answer:-$2}"
+}
+
+# Claude Code's system prompt is far larger than Ollama's 4k default context.
+# Serving with a small context truncates the instructions and produces the
+# confused/mixed answers symptom. 32k is the working floor for agentic use.
+# Defaults come from the previous session's tuning choices when present.
+OLLAMA_CTX="${OLLAMA_CTX:-$(tune_get TUNE_CTX)}"; OLLAMA_CTX="${OLLAMA_CTX:-32768}"
+TUNE_KV="${TUNE_KV:-$(tune_get TUNE_KV)}"
+TUNE_THINK="${TUNE_THINK:-$(tune_get TUNE_THINK)}"
+TUNE_SIDEKICK="${TUNE_SIDEKICK:-$(tune_get TUNE_SIDEKICK)}"
+loaded_ctx() {  # context length of the currently loaded model (0 if none)
+    curl -sf "http://$(api_host)/api/ps" 2>/dev/null | python3 -c '
+import json,sys
+try:
+    m = json.load(sys.stdin).get("models", [])
+    print(m[0].get("context_length", 0) if m else 0)
+except Exception:
+    print(0)' 2>/dev/null
+}
 
 # ---------- 1. model selector ------------------------------------------------
 # Prints the chosen model name on stdout; menu/prompts go to the terminal.
@@ -136,7 +179,7 @@ launchOllamaFreeResources() {
         else
             printf "  %-28s using %s%d MB%s of memory. " "$name2" "$BOLD" "$mem" "$RESET" >&2
         fi
-        if ask_yn "Close?"; then
+        if ask_ny "Close?"; then
             osascript -e "quit app \"$name2\"" 2>/dev/null
             sleep 2
             if kill -0 "$pid2" 2>/dev/null; then
@@ -194,24 +237,138 @@ launchOllamaModelPrerequisites() {
     ok "Prerequisites met: ${model} fits this machine."
 }
 
+# ---------- 3.5 tuning family ------------------------------------------------
+# launchOllamaModel<Name>Tuning() — one question each, Enter keeps the shown
+# default (current system value, or the previous session's choice).
+
+# GPU wired limit — ALWAYS asked; default is whatever is set right now.
+launchOllamaModelGpuTuning() {
+    local total_mb cur def_mb cur_disp val
+    total_mb=$(( $(sysctl -n hw.memsize) / 1048576 ))
+    cur=$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)
+    def_mb=$(( total_mb * 3 / 4 ))
+    [ "$cur" = "0" ] && cur_disp="0 (macOS default, ~${def_mb} MB usable)" || cur_disp="${cur} MB"
+    info "GPU memory limit — current: ${cur_disp}"
+    echo "    90% of RAM = $(( total_mb * 9 / 10 )) MB. Keep at least 4096 MB for macOS. 0 = macOS default."
+    val=$(ask_val "GPU limit in MB" "$cur")
+    case "$val" in *[!0-9]*) warn "Not a number — keeping current."; return 0 ;; esac
+    [ "$val" = "$cur" ] && { ok "GPU limit unchanged (${cur_disp})."; return 0; }
+    if [ "$val" != "0" ] && [ "$val" -gt $(( total_mb - 4096 )) ]; then
+        warn "Refusing ${val} MB — would leave macOS under 4 GB. Keeping current."
+        return 0
+    fi
+    sudo sysctl iogpu.wired_limit_mb="$val" >/dev/null \
+        && ok "GPU limit set to ${val} MB (resets at reboot)." \
+        || fail "sysctl failed — GPU limit unchanged."
+}
+
+# Context window — default: previous choice (or 32768).
+launchOllamaModelContextTuning() {
+    local val
+    info "Context window — bigger helps Claude Code, costs KV-cache memory."
+    echo "    16384 light · 32768 Claude Code floor · 65536 recommended with q8_0 KV · 131072 max"
+    val=$(ask_val "Context tokens" "$OLLAMA_CTX")
+    case "$val" in *[!0-9]*) warn "Not a number — keeping ${OLLAMA_CTX}."; return 0 ;; esac
+    OLLAMA_CTX="$val"
+    tune_set TUNE_CTX "$val"
+    ok "Context: ${OLLAMA_CTX} tokens (applied when the server (re)starts)."
+}
+
+# KV-cache precision — default: previous choice, else q8_0 for 64k+ contexts.
+launchOllamaModelKvCacheTuning() {
+    local def val
+    def="${TUNE_KV:-$( [ "$OLLAMA_CTX" -ge 65536 ] && echo q8_0 || echo f16 )}"
+    info "KV-cache precision — q8_0 halves cache memory (uses flash attention), f16 = full."
+    val=$(ask_val "KV cache type (f16 / q8_0)" "$def")
+    case "$val" in
+        f16|q8_0) TUNE_KV="$val"; tune_set TUNE_KV "$val"
+                  ok "KV cache: ${TUNE_KV} (applied when the server (re)starts)." ;;
+        *) warn "Unknown type — keeping ${def}."; TUNE_KV="$def" ;;
+    esac
+}
+
+is_thinking_model() { case "$1" in qwen3*|deepseek-r1*|gpt-oss*|magistral*) return 0 ;; *) return 1 ;; esac; }
+
+# Thinking on/off — asked only for thinking-family models; default: previous
+# choice, else off (measured FLAKY tool calls here with thinking on).
+launchOllamaModelThinkingTuning() {
+    local model="${1:?model name required}" def val
+    is_thinking_model "$model" || { TUNE_THINK=""; return 0; }
+    def="${TUNE_THINK:-off}"
+    info "${model} is a thinking model — thinking gives deeper reasoning, but slower"
+    info "answers and less consistent tool calls under Claude Code."
+    val=$(ask_val "Thinking (on / off)" "$def")
+    case "$val" in
+        on|off) TUNE_THINK="$val"; tune_set TUNE_THINK "$val"; ok "Thinking: ${TUNE_THINK}." ;;
+        *) warn "Use on/off — keeping ${def}."; TUNE_THINK="$def" ;;
+    esac
+}
+
+# Sidekick — small resident model for Claude Code's background (Haiku) tasks;
+# asked only when a small model exists. Default: previous choice.
+launchOllamaModelSidekickTuning() {
+    local model="${1:?model name required}" candidates def val
+    candidates=$(ollama list 2>/dev/null | awk -v m="$model" \
+        'NR>1 && $1!=m { if ($4=="MB" || ($4=="GB" && $3+0<=8)) print $1 }')
+    [ -z "$candidates" ] && { TUNE_SIDEKICK=""; return 0; }
+    def="${TUNE_SIDEKICK:-$(echo "$candidates" | head -1)}"
+    info "Claude Code uses a small 'Haiku' tier for background tasks — a small local"
+    info "model there keeps the big model free. Candidates:"
+    echo "$candidates" | sed 's/^/      /'
+    val=$(ask_val "Sidekick model (or 'none' = main model does everything)" "$def")
+    if [ "$val" = "none" ]; then
+        TUNE_SIDEKICK=""; tune_set TUNE_SIDEKICK "none"
+        ok "No sidekick — ${model} handles all tiers."
+    elif echo "$candidates" | grep -qx "$val"; then
+        TUNE_SIDEKICK="$val"; tune_set TUNE_SIDEKICK "$val"
+        ok "Sidekick for background tasks: ${TUNE_SIDEKICK}."
+    else
+        warn "'${val}' is not an installed small model — keeping ${def}."
+        [ "$def" = "none" ] && TUNE_SIDEKICK="" || TUNE_SIDEKICK="$def"
+    fi
+}
+
+# Wrapper for the whole family.
+launchOllamaModelTuning() {
+    local model="${1:?model name required}"
+    echo
+    info "${BOLD}Tuning — Enter keeps the value shown in [brackets] (current/previous).${RESET}"
+    launchOllamaModelGpuTuning
+    launchOllamaModelContextTuning
+    launchOllamaModelKvCacheTuning
+    launchOllamaModelThinkingTuning "$model"
+    launchOllamaModelSidekickTuning "$model"
+}
+
 # ---------- 4. launch server + model -----------------------------------------
 # Args: $1 = model name.
 launchOllamaModel() {
     local model="${1:?model name required}"
     info "Launching Ollama with ${model}..."
 
-    # server: start only if not already up
+    # server: must run with a Claude-Code-sized context window (OLLAMA_CTX)
     if server_up; then
-        ok "Ollama server already running — leaving it as is."
-    else
-        if command -v brew >/dev/null 2>&1 && brew list ollama >/dev/null 2>&1; then
-            brew services start ollama >/dev/null 2>&1 || nohup ollama serve >/dev/null 2>&1 &
-        else
-            nohup ollama serve >/dev/null 2>&1 &
+        ok "Ollama server already running."
+        local ctx
+        ctx=$(loaded_ctx)
+        if [ -n "$ctx" ] && [ "$ctx" != "0" ] && [ "$ctx" -lt "$OLLAMA_CTX" ]; then
+            warn "Loaded model has a ${ctx}-token context — too small for Claude Code (needs ${OLLAMA_CTX})."
+            if ask_yn "Restart the server with OLLAMA_CONTEXT_LENGTH=${OLLAMA_CTX}?"; then
+                brew services stop ollama >/dev/null 2>&1
+                pkill -f "ollama serve" 2>/dev/null; sleep 2
+                OLLAMA_CONTEXT_LENGTH="$OLLAMA_CTX" OLLAMA_FLASH_ATTENTION=1 \
+                    OLLAMA_KV_CACHE_TYPE="${TUNE_KV:-f16}" nohup ollama serve >/dev/null 2>&1 &
+                sleep 3
+                server_up || { fail "Server did not come back up."; return 1; }
+                ok "Server restarted (context ${OLLAMA_CTX}, KV cache ${TUNE_KV:-f16})."
+            fi
         fi
+    else
+        OLLAMA_CONTEXT_LENGTH="$OLLAMA_CTX" OLLAMA_FLASH_ATTENTION=1 \
+            OLLAMA_KV_CACHE_TYPE="${TUNE_KV:-f16}" nohup ollama serve >/dev/null 2>&1 &
         sleep 3
         server_up || { fail "Could not start the Ollama server."; return 1; }
-        ok "Ollama server started."
+        ok "Ollama server started (context ${OLLAMA_CTX}, KV cache ${TUNE_KV:-f16})."
     fi
 
     # already loaded models?
@@ -230,8 +387,11 @@ launchOllamaModel() {
             fi
         done
         info "Loading ${model} into memory (first token may take a while)..."
-        curl -sf "http://$(api_host)/api/generate" \
-             -d "{\"model\": \"${model}\", \"keep_alive\": \"60m\"}" >/dev/null \
+        local load_body="{\"model\": \"${model}\", \"keep_alive\": \"60m\"}"
+        if [ "${TUNE_THINK:-}" = "off" ] && is_thinking_model "$model"; then
+            load_body="{\"model\": \"${model}\", \"keep_alive\": \"60m\", \"think\": false}"
+        fi
+        curl -sf "http://$(api_host)/api/generate" -d "$load_body" >/dev/null \
             || { fail "Failed to load ${model}."; return 1; }
         ok "${model} loaded (kept in memory for 60 min of idle)."
     fi
@@ -257,12 +417,17 @@ launchClaudeCliToOllama() {
     info "Launching Claude CLI in $(pwd) connected to ${model} via Ollama..."
     warn "Local models are weaker than hosted Claude — expect slower, simpler agentic behavior."
 
+    # background (Haiku) tier: the tuned sidekick model if one was chosen
+    local haiku="${TUNE_SIDEKICK:-}"
+    case "$haiku" in ""|none) haiku="$model" ;; esac
+    [ "$haiku" != "$model" ] && ok "Background (Haiku) tier -> ${haiku}"
+
     ANTHROPIC_BASE_URL="http://$(api_host)" \
     ANTHROPIC_AUTH_TOKEN="ollama" \
     ANTHROPIC_API_KEY="" \
     ANTHROPIC_DEFAULT_SONNET_MODEL="$model" \
     ANTHROPIC_DEFAULT_OPUS_MODEL="$model" \
-    ANTHROPIC_DEFAULT_HAIKU_MODEL="$model" \
+    ANTHROPIC_DEFAULT_HAIKU_MODEL="$haiku" \
     claude --model "$model"
 }
 
@@ -273,11 +438,12 @@ launchOllama() {
     ok "Selected: ${model}"
     launchOllamaFreeResources
     launchOllamaModelPrerequisites "$model"       || return 1
+    launchOllamaModelTuning "$model"
     launchOllamaModel "$model"                    || return 1
     launchClaudeCliToOllama "$model"
 }
 
 # ---------- run pipeline when executed (not sourced) -------------------------
-if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+if [ "${BASH_SOURCE[0]:-}" = "$0" ]; then
     launchOllama
 fi
