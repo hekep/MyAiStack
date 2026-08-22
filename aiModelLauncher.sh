@@ -417,6 +417,31 @@ launchClaudeCliToOllama() {
     info "Launching Claude CLI in $(pwd) connected to ${model} via Ollama..."
     warn "Local models are weaker than hosted Claude — expect slower, simpler agentic behavior."
 
+    # session mode — resume/continue are purely local (JSONL under ~/.claude),
+    # so they work identically with a local model backend.
+    # Asked ONLY when previous sessions exist for this directory; otherwise
+    # silently starts a new session.
+    local smode="new" sflag="" proj_dir n_sessions answer
+    proj_dir="$HOME/.claude/projects/$(pwd | sed 's|[/_.]|-|g')"
+    if ls "$proj_dir"/*.jsonl >/dev/null 2>&1; then
+        n_sessions=$(ls "$proj_dir"/*.jsonl 2>/dev/null | wc -l | tr -d ' ')
+        info "${n_sessions} previous session(s) found for this directory."
+        answer=$(ask_val "Session: C = continue latest, r = resume picker, n = new" "C")
+        case "$answer" in
+            [Cc]) smode="continue"; sflag="--continue" ;;
+            [Rr]) smode="resume";   sflag="--resume" ;;
+            [Nn]) smode="new" ;;
+            *) warn "Unknown answer '${answer}' — continuing latest."; smode="continue"; sflag="--continue" ;;
+        esac
+        ok "Session mode: ${smode}."
+    fi
+
+    # NOTE: Remote Control (--remote-control / claude remote-control) does NOT
+    # work here — it requires api.anthropic.com + claude.ai login, and is
+    # disabled whenever ANTHROPIC_BASE_URL points at a non-Anthropic host.
+    # Remote use of THIS stack = bind Ollama to the LAN (install.sh step 4)
+    # and run claude on the remote machine pointing at this Mac's IP.
+
     # background (Haiku) tier: the tuned sidekick model if one was chosen
     local haiku="${TUNE_SIDEKICK:-}"
     case "$haiku" in ""|none) haiku="$model" ;; esac
@@ -428,7 +453,7 @@ launchClaudeCliToOllama() {
     ANTHROPIC_DEFAULT_SONNET_MODEL="$model" \
     ANTHROPIC_DEFAULT_OPUS_MODEL="$model" \
     ANTHROPIC_DEFAULT_HAIKU_MODEL="$haiku" \
-    claude --model "$model"
+    claude --model "$model" $sflag
 }
 
 # ---------- 6. wrapper: full pipeline ----------------------------------------

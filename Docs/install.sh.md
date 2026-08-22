@@ -22,9 +22,10 @@ script and each individual function can be run any number of times.
 | `installOllamaDiskGate` | **HARD BLOCK** below 25 GB free (60+ recommended). Shows shortfall + measured disk hogs, loops *Enter = re-check / q = quit*. No bypass. | Passes instantly when already met |
 | `installOllamaHomebrew` | Homebrew present or offered | Skips if present |
 | `installOllamaEngine` | Ollama runtime. Detects install kind: standalone .app → offers brew migration (models in `~/.ollama` preserved); brew-managed → checks `brew outdated` and **proposes upgrade only if one exists**; missing → offers install | Idempotent |
-| `installOllamaServer` | Server + **network exposure choice**: localhost-only (default) or LAN-only — binds the Mac's private IP (refuses non-RFC-1918), warns Ollama has **no authentication**, notes the DHCP caveat, installs a dedicated LaunchAgent (`local.ollama.lan.plist`) since `brew services` drops env vars. Prints actual listening sockets from `lsof`. | Leaves a running server alone |
+| `installOllamaServer` | Server + **network exposure choice**: localhost-only or LAN-only — binds the Mac's private IP (refuses non-RFC-1918), warns Ollama has **no authentication**, notes the DHCP caveat, installs a dedicated LaunchAgent (`local.ollama.lan.plist`) since `brew services` drops env vars. Prints actual listening sockets from `lsof`. | **Detects what is active now** (LAN LaunchAgent present, or server answering on the LAN IP) and defaults the question to keep it — Enter = no change. An explicit LAN→localhost switch tears the LAN agent down. |
 | `installOllamaUv` | uv (prerequisite of mlx-lm); proposes upgrade if brew reports one | Idempotent |
-| `installOllamaMlx` | mlx-lm via uv; offers `uv tool upgrade` when already installed | Idempotent |
+| `installOllamaMlx` | mlx-lm via uv | When installed, **checks PyPI automatically** and asks to update only if a newer version actually exists — no question on an up-to-date rerun |
+| `installOllamaClaudeCli` | Claude Code CLI — the frontend aiModelLauncher.sh connects to local models | First run (missing) → proposes installation (default Y). Rerun (present) → **automatic** version check against the npm registry (works for npm *and* native installs); only when a newer version exists does it ask "Update now? [Y/n]" — updating via the matching mechanism (`npm install -g` or `claude update`). |
 | `installOllamaModels` | **Merged model step — see below** | Loops until "N" |
 | `installOllamaVerification` | Full status summary (versions, server, models) + optional `--verbose` throughput test | Pure read/report |
 | `installOllama` | **Wrapper** — runs all of the above in order; hard-fails on sanity/disk/brew/engine, degrades gracefully on the rest | — |
@@ -35,12 +36,36 @@ Replaces the old fixed "step 7 + step 8" model pulls with a universal,
 hardware-aware chooser:
 
 1. **Scans Ollama** for what is already downloaded (`ollama list`).
-2. Builds a numbered menu from a curated catalog (~23 models, biggest →
+2. Builds a numbered menu from a curated catalog (~29 entries, biggest →
    smallest), showing only models that:
    - **fit this host** — estimated need (`size × 1.3 + 2 GB` for KV-cache and
-     runtime) must be within the GPU allocation (`GPU_GB`); and
+     runtime) must be within the GPU allocation; and
    - are **not yet downloaded**.
-3. Menu is capped at **25 options**, ordered **biggest to smallest**, each line
+
+   The GPU allocation is read from the **currently set**
+   `iogpu.wired_limit_mb` (falling back to the macOS ~75 % default) — raising
+   the limit via the launcher's GPU tuning widens the menu, and the step
+   prints the exact `sysctl` command that unlocks the next tier.
+
+   **Quantization variants** are separate catalog entries for the main coder
+   models: default `q4_K_M` plus `q8_0` (+~85 % size, effectively lossless)
+   where the registry offers them. Which quants appear is pure fit math
+   against the current GPU limit and free disk.
+
+   **Ollama-registry tags only** — `hf.co/*` GGUF entries (which would have
+   added Q5_K_M/Q6_K from HuggingFace) were removed after direct HF pulls
+   reproducibly failed on Ollama 0.32 with `context deadline exceeded` at the
+   final commit, despite complete blob downloads and working resume. Registry
+   pulls work reliably; the retry logic (3 attempts on transient errors) and
+   resume-aware cleanup remain in place for them.
+3. **Verifies every candidate tag against the live registry** before offering
+   it (parallel manifest probes to `registry.ollama.ai`, cached 24 h — first
+   run ~2 s, reruns instant; unreachable network = benefit of the doubt).
+   Non-existent tags are hidden with a note, so the menu can never offer a
+   pull that would 404. (The registry has no single list-everything endpoint,
+   so one tiny probe per candidate is the practical equivalent of the "one
+   remote query".)
+4. Menu is capped at **25 options**, ordered **biggest to smallest**, each line
    showing download size, estimated RAM need, and a one-line description.
    Last option is always **N) No download**.
 4. After each pull the menu **re-renders** (the just-downloaded model
@@ -80,6 +105,6 @@ source install.sh             # à la carte, e.g.:
 installOllamaModels           # just the model menu
 ```
 
-Companions: [AI_CompatibilityReport.md](../AI_CompatibilityReport.md) (model
-rationale), [uninstall.sh.md](uninstall.sh.md) (reversal),
-[aiModelLauncher.sh.md](aiModelLauncher.sh.md) (day-to-day launching).
+Companions: [uninstall.sh.md](uninstall.sh.md) (reversal),
+[aiModelLauncher.sh.md](aiModelLauncher.sh.md) (day-to-day launching),
+[aiModelTest.sh.md](aiModelTest.sh.md) (benchmarking after pulls).

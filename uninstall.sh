@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # uninstall.sh — Local AI coding stack remover
-# Companion to install.sh / AI_CompatibilityReport.md
+# Companion to install.sh
 #
 # Interactive: asks per item whether to remove it, ONE question at a time,
 # in reverse dependency order — most-dependent first, foundations last:

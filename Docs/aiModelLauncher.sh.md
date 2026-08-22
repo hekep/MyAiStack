@@ -85,6 +85,24 @@ The three tier variables all map to the chosen model because Claude Code
 requests different tiers for different subtasks. Your normal shell is
 untouched — real Claude keeps working elsewhere.
 
+**Session mode** — asked **only when previous sessions exist** for the current
+directory (detected in `~/.claude/projects/<encoded-path>/*.jsonl`); with no
+history it silently starts new. With history, the prompt is
+`Session: C = continue latest, r = resume picker, n = new [C]` — Enter
+continues the latest session. Resume/continue are purely local (JSONL
+transcripts), so they work identically with a local model backend, and a
+session started against real Claude can be resumed on a local model (or vice
+versa).
+
+**Remote Control does NOT work with local models.** `--remote-control` /
+`claude remote-control` requires claude.ai login on a Pro/Max/Team plan AND
+the API endpoint to be `api.anthropic.com`; Claude Code explicitly disables it
+whenever `ANTHROPIC_BASE_URL` points at a non-Anthropic host (docs:
+code.claude.com/docs/en/remote-control.md, llm-gateway-connect.md). The
+local-stack equivalents: bind Ollama to the LAN (install.sh step 4) and run
+`claude` on the remote machine pointed at this Mac's IP — or run the launcher
+inside `tmux`/`ssh` to detach and reattach the session from anywhere.
+
 ### 6. `launchOllama`
 The wrapper: selector → free resources → prerequisites (aborts on failure) →
 launch → Claude CLI. This is what runs when you execute the script directly.

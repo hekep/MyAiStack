@@ -13,9 +13,6 @@ script does, how it works, and why it is necessary**.
 | [aiModelTest.sh](../aiModelTest.sh) | [aiModelTest.sh.md](aiModelTest.sh.md) | Layered stack verification: server → raw generation (tokens/sec) → Anthropic endpoint → tool-calling (with retry, PASS/FLAKY/FAIL) → context window. Reusable functions (`aiModelTestReset`/`aiModelTestRun`) with metrics exported for wrappers. |
 | [testAllAiModels.sh](../testAllAiModels.sh) | [testAllAiModels.sh.md](testAllAiModels.sh.md) | Runs the aiModelTest suite over every downloaded model (custom prompt, clean load per model) and prints one comparison table: model, tokens, time, tok/s, tool call, total time. |
 
-Background: [AI_CompatibilityReport.md](../AI_CompatibilityReport.md) — the
-hardware assessment and model recommendations these scripts implement.
-
 ## Shared design principles
 
 - **One question at a time** — every destructive or installing action is an
