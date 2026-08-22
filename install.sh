@@ -218,6 +218,7 @@ installOllamaServer() {
     </array>
     <key>EnvironmentVariables</key><dict>
         <key>OLLAMA_HOST</key><string>${LANIP}:11434</string>
+        <key>OLLAMA_CONTEXT_LENGTH</key><string>32768</string>
     </dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
@@ -235,9 +236,11 @@ EOF
             ok "Ollama server already running (localhost-only)."
         elif brew list ollama >/dev/null 2>&1; then
             if ask "Start Ollama as a background service (brew services, auto-starts on login)?"; then
+                warn "brew services cannot pass env vars — server runs with the 4k default context."
+                warn "For Claude Code use, aiModelLauncher.sh will offer a restart with 32k context."
                 brew services start ollama; sleep 3
-            elif ask "Start Ollama just for this session instead?"; then
-                nohup ollama serve >/dev/null 2>&1 &
+            elif ask "Start Ollama just for this session (with 32k context for Claude Code)?"; then
+                OLLAMA_CONTEXT_LENGTH=32768 nohup ollama serve >/dev/null 2>&1 &
                 sleep 3
             fi
         else
@@ -416,6 +419,6 @@ installOllama() {
 }
 
 # ---------- run pipeline when executed (not sourced) -------------------------
-if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+if [ "${BASH_SOURCE[0]:-}" = "$0" ]; then
     installOllama
 fi
