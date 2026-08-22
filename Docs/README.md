@@ -9,7 +9,9 @@ script does, how it works, and why it is necessary**.
 | [uninstall.sh](../uninstall.sh) | [uninstall.sh.md](uninstall.sh.md) | Reverses install.sh in reverse-dependency order: models → mlx-lm → Ollama → `~/.ollama` (double-confirmed) → uv. Homebrew untouched. |
 | [noDockerRole.sh](../noDockerRole.sh) | [noDockerRole.sh.md](noDockerRole.sh.md) | "Reg cleaner" purge of Docker Desktop — app, 33 GB VM disk, root daemons, symlinks, traces, keychain — protecting `~/MyDocker*`. Reports GB gained per step. |
 | [noCodexRole.sh](../noCodexRole.sh) | [noCodexRole.sh.md](noCodexRole.sh.md) | Removes OpenAI Codex and ~2.2 GB of leftovers while guaranteeing ChatGPT survives; handles the two Codex/ChatGPT grey zones explicitly. |
-| [aiModelLauncher.sh](../aiModelLauncher.sh) | [aiModelLauncher.sh.md](aiModelLauncher.sh.md) | Six functions: pick model → free memory → RAM prerequisite gate → launch server+model with usage report → Claude CLI wired to the local model. |
+| [aiModelLauncher.sh](../aiModelLauncher.sh) | [aiModelLauncher.sh.md](aiModelLauncher.sh.md) | Six functions: pick model → free memory → RAM prerequisite gate → launch server+model (32k context enforced) with usage report → Claude CLI wired to the local model. |
+| [aiModelTest.sh](../aiModelTest.sh) | [aiModelTest.sh.md](aiModelTest.sh.md) | Layered stack verification: server → raw generation (tokens/sec) → Anthropic endpoint → tool-calling (with retry, PASS/FLAKY/FAIL) → context window. Reusable functions (`aiModelTestReset`/`aiModelTestRun`) with metrics exported for wrappers. |
+| [testAllAiModels.sh](../testAllAiModels.sh) | [testAllAiModels.sh.md](testAllAiModels.sh.md) | Runs the aiModelTest suite over every downloaded model (custom prompt, clean load per model) and prints one comparison table: model, tokens, time, tok/s, tool call, total time. |
 
 Background: [AI_CompatibilityReport.md](../AI_CompatibilityReport.md) — the
 hardware assessment and model recommendations these scripts implement.

@@ -24,7 +24,8 @@ candidate (Slack, Chrome, NetBeans… were only examples). For each app it sums
 real memory use across the app's *entire* process tree (helpers and renderers
 included, matched case-insensitively by `.app` bundle path — so "Code" finds
 "Visual Studio Code.app" helpers), sorts **biggest memory user first**, and
-asks **"Close? [Y/n]"** per app (Enter = yes). Quits gracefully via
+asks **"Close? [y/N]"** per app — **Enter defaults to No**, so mashing Enter
+through the list closes nothing; every close is a deliberate "y". Quits gracefully via
 AppleScript, force-kills only if the graceful quit fails or hangs on a save
 dialog.
 
@@ -44,6 +45,21 @@ The hardware gate. Reads the model's size, estimates true need
 ~75 %-of-RAM allocation (~36 GB here) and **exits non-zero if the model cannot
 fit** — printing the exact `sysctl iogpu.wired_limit_mb` command that would
 raise the limit. Soft-warns if *currently free* memory is short (step 2 helps).
+
+### 3.5 The tuning family — `launchOllamaModel<Name>Tuning`
+
+Runs between the prerequisites gate and the launch (wrapper:
+`launchOllamaModelTuning <model>`). One question per function; **Enter keeps
+the value shown in brackets** — the current system value or the previous
+session's choice, persisted in `~/.aiModelLauncher.conf`.
+
+| Function | Asked | Default | Effect |
+|---|---|---|---|
+| `launchOllamaModelGpuTuning` | **always** | the value set right now (`iogpu.wired_limit_mb`, 0 = macOS ~75 %) | `sudo sysctl` sets the new limit (resets at reboot). Refuses values leaving macOS < 4 GB. |
+| `launchOllamaModelContextTuning` | always | previous choice, else 32768 | `OLLAMA_CONTEXT_LENGTH` on next server (re)start. 16k/32k/64k/128k guidance shown. |
+| `launchOllamaModelKvCacheTuning` | always | previous choice, else q8_0 when ctx ≥ 64k | `OLLAMA_KV_CACHE_TYPE` (+ flash attention) on next server (re)start — q8_0 halves KV memory. |
+| `launchOllamaModelThinkingTuning` | only for thinking models (qwen3\*, deepseek-r1\*, gpt-oss\*, magistral\*) | previous choice, else **off** (measured FLAKY tool calls with thinking on) | `"think": false` on the model load |
+| `launchOllamaModelSidekickTuning` | only when a small (≤ 8 GB) model is installed | previous choice, else the first small model | maps Claude Code's background **Haiku tier** to the sidekick so the big model stays free |
 
 ### 4. `launchOllamaModel <model>`
 - Server already running → leaves it alone.
