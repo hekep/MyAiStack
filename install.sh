@@ -1,22 +1,26 @@
 #!/bin/bash
 #
-# install.sh — Local AI coding stack installer for Mac mini (M4 Pro, 48 GB)
-# Companion to AI_CompatibilityReport.md
+# install.sh — Local AI coding stack installer (universal, function-based)
 #
-# Interactive: asks ONE question at a time, in dependency order.
-# Every step first verifies the requirements established by earlier steps,
-# so the script is safe to re-run — completed steps are detected and skipped.
+# Every step is an independent function, prefixed installOllama*. Each function
+# checks its own prerequisites and whether the work is already done, and
+# proposes an update when one is available — so the script (or any single
+# function) can be run any number of times.
 #
-# Order:
-#   1. Hardware gate: disk space   (HARD BLOCK — refuses to continue until met)
-#   2. Homebrew                    (required by everything below)
-#   3. Ollama migration/upgrade    (.app -> brew formula, or plain upgrade)
-#   4. Ollama server running       (required for pulls)
-#   5. uv                          (required by mlx-lm)
-#   6. mlx-lm                      (optional, fastest path on Apple Silicon)
-#   7. Model: Qwen3.6-35B-A3B      (primary, ~20 GB)
-#   8. Model: Devstral Small 24B   (optional, ~14 GB)
-#   9. Verify throughput
+#   installOllamaSanity          platform + host RAM detection (sets globals)
+#   installOllamaDiskGate        HARD BLOCK until enough free disk
+#   installOllamaHomebrew        Homebrew present / updated
+#   installOllamaEngine          Ollama itself (.app -> brew migration, upgrade)
+#   installOllamaServer          server running; localhost-only or LAN binding
+#   installOllamaUv              uv (needed by mlx-lm)
+#   installOllamaMlx             mlx-lm (Apple-native inference)
+#   installOllamaModels          RAM-aware model menu: pick & pull until "N"
+#   installOllamaVerification    throughput test + status summary
+#   installOllama                wrapper — runs all of the above in order
+#
+# Usage:
+#   ./install.sh                 # full pipeline
+#   source install.sh            # then call any single function
 #
 set -u
 
@@ -30,7 +34,6 @@ ok()    { echo "${GREEN} ✓ ${RESET} $*"; }
 warn()  { echo "${YELLOW} ! ${RESET} $*"; }
 fail()  { echo "${RED} ✗ ${RESET} $*"; }
 
-# ask "question" -> returns 0 for yes, 1 for no. One question at a time.
 ask() {
     local answer
     while true; do
@@ -46,160 +49,150 @@ ask() {
 
 free_gb() { df -g /System/Volumes/Data | awk 'NR==2 {print $4}'; }
 
-# Where to reach the Ollama API. Default: loopback. Step 4 may switch this
-# to the LAN IP if the user chooses LAN exposure.
-OLLAMA_API="127.0.0.1"
+# Where to reach the Ollama API; installOllamaServer may switch it to a LAN IP.
+OLLAMA_API="${OLLAMA_API:-127.0.0.1}"
 ollama_server_up() { curl -sf "http://${OLLAMA_API}:11434/api/version" >/dev/null 2>&1; }
 lan_ip() { ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null; }
 
 model_installed() { ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$1"; }
 
-# require_disk <GB needed> <what for>  -> 0 if enough space
 require_disk() {
     local need=$1 what=$2 have
     have=$(free_gb)
     if [ "$have" -lt "$need" ]; then
         fail "Not enough disk for ${what}: need ~${need} GB free, have ${have} GB."
-        warn "Free space first (Xcode DerivedData, old simulators, Docker images, caches)."
         return 1
     fi
     ok "Disk OK for ${what} (${have} GB free, need ~${need} GB)."
-    return 0
 }
 
-echo "${BOLD}=============================================================${RESET}"
-echo "${BOLD} Local AI coding stack — installer (M4 Pro / 48 GB Mac mini)${RESET}"
-echo "${BOLD}=============================================================${RESET}"
+# ---------- step: sanity — platform + host RAM (sets TOTAL_GB / GPU_GB) ------
+installOllamaSanity() {
+    info "installOllamaSanity — platform and memory detection"
+    if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
+        fail "This script targets Apple Silicon macOS. Aborting."
+        return 1
+    fi
+    ok "Apple Silicon macOS detected."
 
-# ---------- Step 0: sanity — Apple Silicon mac + RAM -------------------------
-if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
-    fail "This script targets Apple Silicon macOS. Aborting."
-    exit 1
-fi
-ok "Apple Silicon macOS detected."
+    TOTAL_GB=$(( $(sysctl -n hw.memsize) / 1073741824 ))
+    GPU_GB=$(( TOTAL_GB * 3 / 4 ))    # macOS default GPU wired limit ~75% of RAM
+    if [ "$TOTAL_GB" -lt 16 ]; then
+        fail "Only ${TOTAL_GB} GB unified memory — below the 16 GB minimum for local coding models."
+        return 1
+    fi
+    ok "${TOTAL_GB} GB unified memory — GPU can address ~${GPU_GB} GB. Model menu will be sized to this."
+}
 
-RAM_GB=$(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 ))
-if [ "$RAM_GB" -lt 32 ]; then
-    fail "Only ${RAM_GB} GB unified memory — the recommended models need 32 GB+. Aborting."
-    exit 1
-fi
-ok "${RAM_GB} GB unified memory — sufficient for the recommended models."
-
-# ---------- Step 1: HARD GATE — disk space -----------------------------------
-# The script REFUSES to proceed until this requirement is met. Free space in
-# another terminal, then re-check from the prompt below. No bypass.
-MIN_DISK_GB=25       # bare minimum: primary model (~20 GB) + headroom
+# ---------- step: HARD GATE — disk space -------------------------------------
+MIN_DISK_GB=25
 RECOMMENDED_DISK_GB=60
-
-info "Step 1/9 — Hardware gate: disk space (need >= ${MIN_DISK_GB} GB, ${RECOMMENDED_DISK_GB}+ GB recommended)"
-while true; do
-    HAVE_GB=$(free_gb)
-    if [ "$HAVE_GB" -ge "$MIN_DISK_GB" ]; then
-        if [ "$HAVE_GB" -lt "$RECOMMENDED_DISK_GB" ]; then
-            ok "${HAVE_GB} GB free — meets the ${MIN_DISK_GB} GB minimum."
-            warn "Below the recommended ${RECOMMENDED_DISK_GB} GB: fine for the primary model, but no room for Devstral or the 80B stretch model."
-        else
-            ok "${HAVE_GB} GB free — requirement met."
+installOllamaDiskGate() {
+    info "installOllamaDiskGate — disk space (need >= ${MIN_DISK_GB} GB, ${RECOMMENDED_DISK_GB}+ recommended)"
+    local have
+    while true; do
+        have=$(free_gb)
+        if [ "$have" -ge "$MIN_DISK_GB" ]; then
+            [ "$have" -lt "$RECOMMENDED_DISK_GB" ] \
+                && warn "${have} GB free — meets the minimum, below the recommended ${RECOMMENDED_DISK_GB} GB." \
+                || ok "${have} GB free — requirement met."
+            return 0
         fi
-        break
-    fi
-
-    fail "REQUIREMENT NOT MET: ${HAVE_GB} GB free, need at least ${MIN_DISK_GB} GB (short by $((MIN_DISK_GB - HAVE_GB)) GB)."
-    echo
-    echo "    ${BOLD}Reminder — nothing can be installed until disk space is freed.${RESET}"
-    echo "    Usual suspects on a dev machine (checking actual sizes...):"
-    for d in "$HOME/Library/Developer/Xcode/DerivedData" \
-             "$HOME/Library/Developer/CoreSimulator" \
-             "$HOME/Library/Caches" \
-             "$HOME/Library/Containers/com.docker.docker"; do
-        [ -d "$d" ] && echo "      $(du -sh "$d" 2>/dev/null | awk '{print $1}')	$d"
+        fail "REQUIREMENT NOT MET: ${have} GB free, need at least ${MIN_DISK_GB} GB (short by $((MIN_DISK_GB - have)) GB)."
+        echo
+        echo "    ${BOLD}Nothing can be installed until disk space is freed.${RESET}"
+        echo "    Usual suspects (actual sizes):"
+        local d
+        for d in "$HOME/Library/Developer/Xcode/DerivedData" \
+                 "$HOME/Library/Developer/CoreSimulator" \
+                 "$HOME/Library/Caches" \
+                 "$HOME/Library/Containers/com.docker.docker" \
+                 "$HOME/.cache"; do
+            [ -d "$d" ] && echo "      $(du -sh "$d" 2>/dev/null | awk '{print $1}')	$d"
+        done
+        printf "    %sPress Enter to re-check, or type q to quit:%s " "${BOLD}" "${RESET}"
+        local REPLY=""
+        read -r REPLY </dev/tty || { echo; fail "No interactive terminal available — aborting."; exit 1; }
+        [ "$REPLY" = "q" ] || [ "$REPLY" = "Q" ] && { echo "Aborted — re-run once ${MIN_DISK_GB}+ GB is free."; return 1; }
     done
-    echo
-    echo "    Free space in another terminal, then re-check here."
-    printf "    %sPress Enter to re-check, or type q to quit:%s " "${BOLD}" "${RESET}"
-    REPLY=""
-    read -r REPLY </dev/tty || { echo; fail "No interactive terminal available — aborting."; exit 1; }
-    if [ "$REPLY" = "q" ] || [ "$REPLY" = "Q" ]; then
-        echo "Aborted — re-run ./install.sh once ${MIN_DISK_GB}+ GB is free."
-        exit 1
-    fi
-done
+}
 
-# ---------- Step 2: Homebrew -------------------------------------------------
-info "Step 2/9 — Homebrew (required for every later step)"
-if command -v brew >/dev/null 2>&1; then
-    ok "Homebrew present: $(brew --version | head -1)"
-else
+# ---------- step: Homebrew ---------------------------------------------------
+installOllamaHomebrew() {
+    info "installOllamaHomebrew — package manager"
+    if command -v brew >/dev/null 2>&1; then
+        ok "Homebrew present: $(brew --version | head -1)"
+        return 0
+    fi
     warn "Homebrew not found."
-    if ask "Install Homebrew now?"; then
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-        eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null || true
-        command -v brew >/dev/null 2>&1 || { fail "Homebrew install failed. Aborting."; exit 1; }
-        ok "Homebrew installed."
-    else
-        fail "Everything below requires Homebrew. Aborting."
-        exit 1
-    fi
-fi
+    ask "Install Homebrew now?" || { fail "Everything below requires Homebrew."; return 1; }
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null || true
+    command -v brew >/dev/null 2>&1 || { fail "Homebrew install failed."; return 1; }
+    ok "Homebrew installed."
+}
 
-# ---------- Step 3: Ollama (migrate .app -> brew, or install/upgrade) --------
-info "Step 3/9 — Ollama"
-# prerequisite: brew (verified above)
-command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew."; exit 1; }
+# ---------- step: Ollama engine ----------------------------------------------
+installOllamaEngine() {
+    info "installOllamaEngine — the Ollama runtime"
+    command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew (run installOllamaHomebrew)."; return 1; }
 
-if [ -d "/Applications/Ollama.app" ]; then
-    warn "Standalone Ollama.app detected — not managed by Homebrew (this is why 'brew upgrade ollama' fails)."
-    echo "    Migrating replaces the app with the brew formula. Models in ~/.ollama are NOT touched."
-    if ask "Remove Ollama.app and reinstall Ollama via Homebrew?"; then
-        osascript -e 'quit app "Ollama"' 2>/dev/null || true
-        sleep 2
-        rm -rf /Applications/Ollama.app
-        [ -L /usr/local/bin/ollama ] && sudo rm -f /usr/local/bin/ollama
-        rm -rf ~/Library/Application\ Support/Ollama \
-               ~/Library/Caches/com.electron.ollama \
-               ~/Library/Preferences/com.electron.ollama.plist \
-               ~/Library/Saved\ Application\ State/com.electron.ollama.savedState
-        ok "Ollama.app removed (models in ~/.ollama preserved)."
-        brew install ollama || { fail "brew install ollama failed."; exit 1; }
-        ok "Ollama installed via Homebrew: $(ollama --version 2>/dev/null)"
-    else
-        warn "Keeping the .app. Later steps assume a recent Ollama — update it via the app's own updater."
+    if [ -d "/Applications/Ollama.app" ]; then
+        warn "Standalone Ollama.app detected — not brew-managed ('brew upgrade ollama' cannot see it)."
+        echo "    Migration replaces the app with the brew formula. Models in ~/.ollama are NOT touched."
+        if ask "Remove Ollama.app and reinstall Ollama via Homebrew?"; then
+            osascript -e 'quit app "Ollama"' 2>/dev/null || true
+            sleep 2
+            rm -rf /Applications/Ollama.app
+            [ -L /usr/local/bin/ollama ] && sudo rm -f /usr/local/bin/ollama
+            rm -rf ~/Library/Application\ Support/Ollama \
+                   ~/Library/Caches/com.electron.ollama \
+                   ~/Library/Preferences/com.electron.ollama.plist \
+                   ~/Library/Saved\ Application\ State/com.electron.ollama.savedState
+            ok "Ollama.app removed (models preserved)."
+            brew install ollama || { fail "brew install ollama failed."; return 1; }
+            ok "Ollama installed via Homebrew: $(ollama --version 2>/dev/null)"
+        else
+            warn "Keeping the .app. Later steps assume a recent Ollama — update via the app's own updater."
+        fi
+        return 0
     fi
-elif brew list ollama >/dev/null 2>&1; then
-    ok "Ollama already brew-managed: $(ollama --version 2>/dev/null)"
-    if ask "Upgrade Ollama to the latest version?"; then
-        brew upgrade ollama 2>/dev/null || ok "Already up to date."
+
+    if brew list ollama >/dev/null 2>&1; then
+        ok "Ollama brew-managed: $(ollama --version 2>/dev/null)"
+        if brew outdated ollama >/dev/null 2>&1; then
+            :   # up to date — brew outdated exits 0 with no output when current
+        fi
+        if [ -n "$(brew outdated ollama 2>/dev/null)" ]; then
+            warn "A newer Ollama is available."
+            ask "Upgrade Ollama now?" && brew upgrade ollama
+        else
+            ok "Already the latest version."
+        fi
+        return 0
     fi
-else
+
     warn "Ollama not installed."
-    if ask "Install Ollama via Homebrew?"; then
-        brew install ollama || { fail "brew install ollama failed."; exit 1; }
-        ok "Installed: $(ollama --version 2>/dev/null)"
-    else
-        warn "Skipping. Model steps (7-9) will be unavailable."
-    fi
-fi
+    ask "Install Ollama via Homebrew?" || { warn "Skipping — model steps will be unavailable."; return 0; }
+    brew install ollama || { fail "brew install ollama failed."; return 1; }
+    ok "Installed: $(ollama --version 2>/dev/null)"
+}
 
-# ---------- Step 4: Ollama server --------------------------------------------
-info "Step 4/9 — Ollama server"
-# prerequisite: ollama binary
-if ! command -v ollama >/dev/null 2>&1; then
-    warn "Prerequisite missing: ollama binary — skipping server, model pulls, and verification."
-    SKIP_OLLAMA=1
-else
-    SKIP_OLLAMA=0
+# ---------- step: server + network exposure ----------------------------------
+installOllamaServer() {
+    info "installOllamaServer — server process and network binding"
+    command -v ollama >/dev/null 2>&1 || { fail "Prerequisite missing: ollama binary (run installOllamaEngine)."; return 1; }
 
-    # --- network exposure: loopback-only (default) or LAN-only ---------------
     echo "    Network exposure options:"
     echo "      localhost — API on 127.0.0.1 only; nothing else can connect (default, safest)"
-    echo "      LAN       — API bound to this Mac's 192.168.x address; reachable from your"
-    echo "                  local network only. NOTE: Ollama has NO authentication — anyone"
-    echo "                  on the LAN could prompt, pull, or delete models."
+    echo "      LAN       — API bound to this Mac's private LAN address; reachable from your"
+    echo "                  local network only. NOTE: Ollama has NO authentication."
+    local LANIP
     LANIP=$(lan_ip)
     if [ -n "$LANIP" ] && ask "Expose Ollama to the local network (${LANIP}, instead of localhost-only)?"; then
         case "$LANIP" in
             192.168.*|10.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) : ;;
-            *) fail "This Mac's IP ${LANIP} is not a private-range address — refusing to expose. Falling back to localhost."; LANIP="" ;;
+            *) fail "IP ${LANIP} is not a private-range address — refusing to expose. Using localhost."; LANIP="" ;;
         esac
     else
         LANIP=""
@@ -207,16 +200,13 @@ else
 
     if [ -n "$LANIP" ]; then
         OLLAMA_API="$LANIP"
-        export OLLAMA_HOST="${LANIP}:11434"      # CLI in this script talks to the same bind
-        warn "DHCP caveat: the server binds ${LANIP}. If the router hands out a different IP later,"
-        warn "the service breaks — give this Mac a DHCP reservation in the router."
+        export OLLAMA_HOST="${LANIP}:11434"
+        warn "DHCP caveat: binds ${LANIP} — give this Mac a DHCP reservation in the router."
         if ollama_server_up; then
             ok "Ollama already serving on ${LANIP}:11434."
         elif ask "Install a login service bound to ${LANIP}:11434 (LaunchAgent)?"; then
-            # brew services regenerates its plist and drops env vars, so LAN mode
-            # gets its own LaunchAgent instead.
             brew services stop ollama >/dev/null 2>&1
-            PLIST="$HOME/Library/LaunchAgents/local.ollama.lan.plist"
+            local PLIST="$HOME/Library/LaunchAgents/local.ollama.lan.plist"
             cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -241,13 +231,11 @@ EOF
             sleep 3
         fi
     else
-        # localhost-only (default)
         if ollama_server_up; then
             ok "Ollama server already running (localhost-only)."
         elif brew list ollama >/dev/null 2>&1; then
             if ask "Start Ollama as a background service (brew services, auto-starts on login)?"; then
-                brew services start ollama
-                sleep 3
+                brew services start ollama; sleep 3
             elif ask "Start Ollama just for this session instead?"; then
                 nohup ollama serve >/dev/null 2>&1 &
                 sleep 3
@@ -264,91 +252,170 @@ EOF
         ok "Server is up on ${OLLAMA_API}:11434."
         lsof -iTCP:11434 -sTCP:LISTEN -n -P 2>/dev/null | tail -n +2 | awk '{print "    listening: "$9}' | sort -u
     else
-        warn "Server still not reachable — model steps will be skipped."
+        warn "Server not reachable — model steps will be unavailable."
+        return 1
     fi
-fi
+}
 
-# ---------- Step 5: uv -------------------------------------------------------
-info "Step 5/9 — uv (Python tool manager, required for mlx-lm)"
-if command -v uv >/dev/null 2>&1; then
-    ok "uv present: $(uv --version)"
-    HAVE_UV=1
-else
-    if ask "Install uv via Homebrew?"; then
-        brew install uv && HAVE_UV=1 || { fail "uv install failed."; HAVE_UV=0; }
-    else
-        warn "Skipping uv — mlx-lm step will be unavailable."
-        HAVE_UV=0
+# ---------- step: uv ---------------------------------------------------------
+installOllamaUv() {
+    info "installOllamaUv — Python tool manager (needed by mlx-lm)"
+    command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew."; return 1; }
+    if command -v uv >/dev/null 2>&1; then
+        ok "uv present: $(uv --version)"
+        if brew list uv >/dev/null 2>&1 && [ -n "$(brew outdated uv 2>/dev/null)" ]; then
+            warn "A newer uv is available."
+            ask "Upgrade uv now?" && brew upgrade uv
+        fi
+        return 0
     fi
-fi
+    ask "Install uv via Homebrew?" || { warn "Skipping — mlx-lm will be unavailable."; return 1; }
+    brew install uv && ok "uv installed." || { fail "uv install failed."; return 1; }
+}
 
-# ---------- Step 6: mlx-lm ---------------------------------------------------
-info "Step 6/9 — mlx-lm (Apple-native inference, fastest path on this chip)"
-# prerequisite: uv
-if [ "${HAVE_UV}" -eq 1 ]; then
-    if command -v mlx_lm.generate >/dev/null 2>&1 || uv tool list 2>/dev/null | grep -q mlx-lm; then
+# ---------- step: mlx-lm -----------------------------------------------------
+installOllamaMlx() {
+    info "installOllamaMlx — Apple-native inference (fastest path on this chip)"
+    command -v uv >/dev/null 2>&1 || { fail "Prerequisite missing: uv (run installOllamaUv)."; return 1; }
+    if uv tool list 2>/dev/null | grep -q '^mlx-lm'; then
         ok "mlx-lm already installed."
-    elif ask "Install mlx-lm (Apple's MLX inference toolkit)?"; then
-        uv tool install mlx-lm && ok "mlx-lm installed." || fail "mlx-lm install failed."
-    else
-        warn "Skipping mlx-lm."
+        ask "Check for and install mlx-lm updates?" && uv tool upgrade mlx-lm
+        return 0
     fi
-else
-    warn "Prerequisite missing: uv — skipping mlx-lm."
-fi
+    ask "Install mlx-lm?" || { warn "Skipping mlx-lm."; return 0; }
+    uv tool install mlx-lm && ok "mlx-lm installed." || fail "mlx-lm install failed."
+}
 
-# ---------- Step 7: primary model — Qwen3.6-35B-A3B --------------------------
-info "Step 7/9 — Primary model: Qwen3.6-35B-A3B (~20 GB, MoE, 256K ctx)"
-# prerequisites: ollama binary + running server + disk
-if [ "$SKIP_OLLAMA" -eq 1 ] || ! ollama_server_up; then
-    warn "Prerequisite missing: running Ollama server — skipping model pulls."
-else
-    PRIMARY_TAG="qwen3.6:35b-a3b"
-    if model_installed "$PRIMARY_TAG" || model_installed "${PRIMARY_TAG}-q4_K_M"; then
-        ok "Primary model already present."
-    elif require_disk 25 "Qwen3.6-35B-A3B (~20 GB + headroom)"; then
-        if ask "Pull ${PRIMARY_TAG} now (~20 GB download)?"; then
-            ollama pull "$PRIMARY_TAG" \
-                || ollama pull "${PRIMARY_TAG}-q4_K_M" \
-                || { fail "Pull failed — tag may differ. Check https://ollama.com/library for the current Qwen3.6 tag."; }
+# ---------- step: models — RAM-aware menu, loop until N ----------------------
+# Catalog: "tag|size_gb|short description". Kept biggest -> smallest.
+# Universal: the menu only shows entries that FIT this host's GPU allocation
+# and are NOT yet downloaded. Refresh the catalog as the ecosystem moves.
+OLLAMA_MODEL_CATALOG=(
+    "gpt-oss:120b|65|OpenAI open-weight MoE, strongest general"
+    "qwen3-coder-next:80b-a3b|43|80B MoE coder, 3B active — strongest open coder"
+    "llama3.3:70b|40|Meta 70B dense, general purpose"
+    "deepseek-r1:70b|40|Reasoning-tuned 70B"
+    "qwen3:32b|20|Qwen3 dense general 32B"
+    "qwen3.6:35b-a3b|20|MoE coder/agent, 3B active, 256K ctx — daily driver"
+    "qwen2.5-coder:32b|20|Dense coder 32B"
+    "deepseek-r1:32b|20|Reasoning 32B"
+    "qwen3-coder:30b|19|Qwen3-Coder 30B MoE"
+    "gemma3:27b|17|Google Gemma 3 27B"
+    "devstral:24b|14|Mistral agentic coder — tool-call reliability"
+    "mistral-small3.2:24b|14|Mistral general 24B"
+    "gpt-oss:20b|13|OpenAI open-weight MoE 20B"
+    "qwen3:14b|9|Qwen3 dense 14B"
+    "qwen2.5-coder:14b|9|Dense coder 14B"
+    "phi4:14b|9|Microsoft Phi-4 14B"
+    "gemma3:12b|8|Gemma 3 12B"
+    "qwen3:8b|5|Qwen3 8B"
+    "llama3.1:8b|5|Meta 8B"
+    "qwen2.5-coder:7b|5|Coder 7B — good FIM/autocomplete"
+    "gemma3:4b|3|Gemma 3 4B"
+    "qwen2.5-coder:3b|2|Coder 3B — low-latency autocomplete"
+    "qwen2.5-coder:1.5b|1|Tiny autocomplete"
+)
+
+installOllamaModels() {
+    info "installOllamaModels — download models suited to this host (${TOTAL_GB:-?} GB RAM)"
+    command -v ollama >/dev/null 2>&1 || { fail "Prerequisite missing: ollama (run installOllamaEngine)."; return 1; }
+    ollama_server_up || { fail "Prerequisite missing: running server (run installOllamaServer)."; return 1; }
+    [ -z "${GPU_GB:-}" ] && { TOTAL_GB=$(( $(sysctl -n hw.memsize) / 1073741824 )); GPU_GB=$(( TOTAL_GB * 3 / 4 )); }
+
+    while true; do
+        # a) what is already downloaded
+        local downloaded
+        downloaded=$(ollama list 2>/dev/null | awk 'NR>1 {print $1}')
+        echo
+        echo "    Already downloaded:"
+        [ -n "$downloaded" ] && echo "$downloaded" | sed 's/^/      /' || echo "      (none)"
+
+        # b) build menu: fits GPU allocation, not downloaded, biggest first, max 25
+        local menu_tags=() menu_lines=() entry tag size desc need
+        for entry in "${OLLAMA_MODEL_CATALOG[@]}"; do
+            IFS='|' read -r tag size desc <<< "$entry"
+            need=$(( size * 13 / 10 + 2 ))                      # weights*1.3 + 2 GB overhead
+            [ "$need" -gt "$GPU_GB" ] && continue               # doesn't fit this host
+            echo "$downloaded" | grep -qx "$tag" && continue    # already present
+            menu_tags+=("$tag")
+            menu_lines+=("$(printf '%-28s %3d GB  (needs ~%d GB RAM)  %s' "$tag" "$size" "$need" "$desc")")
+            [ "${#menu_tags[@]}" -ge 25 ] && break
+        done
+
+        [ "${#menu_tags[@]}" -eq 0 ] && { ok "No further catalog models fit this host — done."; return 0; }
+
+        echo
+        echo "${BOLD}Models that fit this machine (~${GPU_GB} GB usable), biggest first:${RESET}"
+        local i
+        for i in "${!menu_tags[@]}"; do
+            printf "  %2d) %s\n" $((i+1)) "${menu_lines[$i]}"
+        done
+        echo "   N) No download — finish this step"
+
+        local sel
+        printf "\n%sSelect a model to download [1-%d / N]:%s " "${BOLD}" "${#menu_tags[@]}" "${RESET}"
+        read -r sel </dev/tty || { echo; fail "No interactive terminal — aborting."; return 1; }
+        case "$sel" in
+            [Nn]) ok "Model downloads finished."; return 0 ;;
+            *[!0-9]*|"") echo "Enter a number or N."; continue ;;
+        esac
+        [ "$sel" -lt 1 ] || [ "$sel" -gt "${#menu_tags[@]}" ] && { echo "Out of range."; continue; }
+
+        tag="${menu_tags[$((sel-1))]}"
+        IFS='|' read -r _ size _ <<< "$(printf '%s\n' "${OLLAMA_MODEL_CATALOG[@]}" | grep "^${tag}|")"
+        if require_disk $(( size + 5 )) "${tag} (~${size} GB + headroom)"; then
+            info "Pulling ${tag}..."
+            ollama pull "$tag" && ok "${tag} downloaded." \
+                || fail "Pull failed — tag may have changed; check https://ollama.com/library"
         fi
-    fi
+        # loop: menu re-renders without the model just downloaded
+    done
+}
 
-    # ---------- Step 8: optional model — Devstral Small 24B ------------------
-    info "Step 8/9 — Optional model: Devstral Small 24B (~14 GB, tool-call reliability)"
-    if model_installed "devstral:24b" || model_installed "devstral:latest"; then
-        ok "Devstral already present."
-    elif require_disk 18 "Devstral Small (~14 GB + headroom)"; then
-        if ask "Also pull Devstral Small 24B (~14 GB)?"; then
-            ollama pull devstral:24b || ollama pull devstral \
-                || fail "Pull failed — check https://ollama.com/library/devstral for the current tag."
-        fi
-    fi
+# ---------- step: verification -----------------------------------------------
+installOllamaVerification() {
+    info "installOllamaVerification — status and throughput"
+    echo
+    echo "${BOLD}================= Install summary =================${RESET}"
+    command -v brew   >/dev/null 2>&1 && ok "Homebrew: $(brew --version | head -1)"     || fail "Homebrew: missing"
+    command -v ollama >/dev/null 2>&1 && ok "Ollama:   $(ollama --version 2>/dev/null)" || fail "Ollama: missing"
+    ollama_server_up                  && ok "Server:   running on ${OLLAMA_API}:11434"  || warn "Server: not running"
+    command -v uv     >/dev/null 2>&1 && ok "uv:       $(uv --version)"                  || warn "uv: not installed"
+    uv tool list 2>/dev/null | grep -q '^mlx-lm' \
+                                      && ok "mlx-lm:   installed"                        || warn "mlx-lm: not installed"
 
-    # ---------- Step 9: verify ----------------------------------------------
-    info "Step 9/9 — Verification"
-    if model_installed "$PRIMARY_TAG" || model_installed "${PRIMARY_TAG}-q4_K_M"; then
-        if ask "Run a quick throughput test on the primary model?"; then
-            TAG=$(ollama list | awk 'NR>1 {print $1}' | grep '^qwen3.6' | head -1)
-            info "Running: ollama run ${TAG} --verbose (watch the 'eval rate' line — expect tens of tok/s)"
-            ollama run "$TAG" --verbose "Write a Python function that merges two sorted lists." || true
-        fi
-    else
-        warn "Primary model not installed — nothing to verify."
+    command -v ollama >/dev/null 2>&1 && ollama_server_up || { warn "No server — skipping throughput test."; return 0; }
+    echo
+    info "Installed models:"
+    ollama list
+
+    local first
+    first=$(ollama list 2>/dev/null | awk 'NR==2 {print $1}')
+    [ -z "$first" ] && { warn "No models installed — nothing to benchmark."; return 0; }
+    if ask "Run a quick throughput test on ${first}?"; then
+        info "Watch the 'eval rate' line — expect tens of tokens/sec on MoE models."
+        ollama run "$first" --verbose "Write a Python function that merges two sorted lists." || true
     fi
+}
+
+# ---------- wrapper ----------------------------------------------------------
+installOllama() {
+    echo "${BOLD}=============================================================${RESET}"
+    echo "${BOLD} Local AI coding stack — installer (universal, re-runnable)${RESET}"
+    echo "${BOLD}=============================================================${RESET}"
+    installOllamaSanity        || return 1
+    installOllamaDiskGate      || return 1
+    installOllamaHomebrew      || return 1
+    installOllamaEngine        || return 1
+    installOllamaServer        || warn "Continuing without a running server."
+    installOllamaUv            && installOllamaMlx
+    installOllamaModels
+    installOllamaVerification
+    echo
+    echo "Done. See AI_CompatibilityReport.md for tuning (GPU wired limit, quantization picks)."
+}
+
+# ---------- run pipeline when executed (not sourced) -------------------------
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    installOllama
 fi
-
-# ---------- summary ----------------------------------------------------------
-echo
-echo "${BOLD}================= Install summary =================${RESET}"
-command -v brew   >/dev/null 2>&1 && ok "Homebrew: $(brew --version | head -1)"     || fail "Homebrew: missing"
-command -v ollama >/dev/null 2>&1 && ok "Ollama:   $(ollama --version 2>/dev/null)" || fail "Ollama: missing"
-ollama_server_up                  && ok "Server:   running"                          || warn "Server: not running"
-command -v uv     >/dev/null 2>&1 && ok "uv:       $(uv --version)"                  || warn "uv: not installed"
-{ command -v mlx_lm.generate >/dev/null 2>&1 || uv tool list 2>/dev/null | grep -q mlx-lm; } \
-                                  && ok "mlx-lm:   installed"                        || warn "mlx-lm: not installed"
-if command -v ollama >/dev/null 2>&1 && ollama_server_up; then
-    echo; info "Installed models:"; ollama list
-fi
-echo
-echo "Done. See AI_CompatibilityReport.md for tuning (GPU wired limit, 80B stretch model)."
