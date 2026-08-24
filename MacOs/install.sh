@@ -27,6 +27,10 @@
 #   installAiStackLlamacppModels  GGUF files -> ~/Models/llama.cpp
 #   installAiStackMlxmlModels     HF repos   -> HuggingFace cache
 #   installAiStackOllamaModels    registry tags -> ~/.ollama
+#   --- monitoring (optional, macOS-specific) ---
+#   installAiStackMacmonMonitoring     macmon   — default YES; CPU/GPU/ANE + memory
+#   installAiStackAnubisMonitoring     Anubis   — default no;  scraper-bot firewall
+#   installAiStackLitellmMonitoring    LiteLLM  — default no;  proxy logging / OTel
 #   installAiStackVerification    status summary
 #   installAiStack                wrapper — runs all of the above in order
 #
@@ -749,6 +753,64 @@ PYEOF
     return 1
 }
 
+MODEL_LIST_ENGINE="${MODEL_LIST_ENGINE:-Ollama}"     # Llama.cpp / MLX-LM later
+AI_MODEL_CATALOG=()
+
+# repo root = parent of the OS folder holding this script
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
+
+# modelListFile <host_ram_gb> — largest tier <= host RAM (smallest if below all)
+modelListFile() {
+    local ram="$1" dir f tier best="" smallest=""
+    dir="${REPO_ROOT}/ModelLists/${MODEL_LIST_ENGINE}"
+    [ -d "$dir" ] || return 1
+    for f in "$dir"/*_GB_Ram.json; do
+        [ -e "$f" ] || continue
+        tier=$(basename "$f"); tier=${tier%_GB_Ram.json}
+        case "$tier" in ""|*[!0-9]*) continue ;; esac
+        if [ -z "$smallest" ] || [ "$tier" -lt "$smallest" ]; then smallest="$tier"; fi
+        if [ "$tier" -le "$ram" ]; then
+            if [ -z "$best" ] || [ "$tier" -gt "$best" ]; then best="$tier"; fi
+        fi
+    done
+    [ -z "$best" ] && best="$smallest"          # host below every tier
+    [ -z "$best" ] && return 1                  # no lists at all
+    echo "${dir}/${best}_GB_Ram.json"
+}
+
+# parseModelJson <file> — emit "tag|size_gb|description" per model
+parseModelJson() {
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$1" <<'PYEOF'
+import json, sys
+for m in json.load(open(sys.argv[1])).get("models", []):
+    print("%s|%s|%s" % (m["tag"], m["size_gb"], m.get("description", "")))
+PYEOF
+    else
+        # fallback: the generator writes exactly one model object per line
+        sed -n 's/.*"tag": *"\([^"]*\)".*"size_gb": *\([0-9]*\).*"description": *"\([^"]*\)".*/\1|\2|\3/p' "$1"
+    fi
+}
+
+# loadModelCatalog [host_ram_gb] — fill AI_MODEL_CATALOG from the JSON list
+loadModelCatalog() {
+    local ram="${1:-${TOTAL_GB:-0}}" file line
+    [ "$ram" -gt 0 ] 2>/dev/null || ram=$(( $(sysctl -n hw.memsize) / 1073741824 ))
+    file=$(modelListFile "$ram") || {
+        fail "No model lists found in ModelLists/${MODEL_LIST_ENGINE}/ — cannot offer models."
+        return 1
+    }
+    AI_MODEL_CATALOG=()
+    while IFS= read -r line; do
+        [ -n "$line" ] && AI_MODEL_CATALOG+=("$line")
+    done < <(parseModelJson "$file")
+    if [ "${#AI_MODEL_CATALOG[@]}" -eq 0 ]; then
+        fail "Could not parse $(basename "$file") — no models loaded."
+        return 1
+    fi
+    ok "Model list: ${MODEL_LIST_ENGINE}/$(basename "$file") — ${#AI_MODEL_CATALOG[@]} models (host RAM ${ram} GB)."
+}
+
 # ---------- generic model menu, shared by every engine -----------------------
 # The model menu, shared by all three engines.
 # Args: <EngineFolder> <list-installed-fn> <pull-fn>. Loads that engine's
@@ -878,6 +940,105 @@ installAiStackOllamaModels() {
     aiStackModelMenu "Ollama" ollamaListInstalled ollamaPullModel
 }
 
+# ---------- Monitoring -------------------------------------------------------
+# Optional observability around the stack. macOS-specific by nature: a Debian
+# port will want entirely different tools, which is why this layer lives here
+# rather than in a shared file.
+
+# True when macmon is on PATH.
+macmon_installed()  { command -v macmon >/dev/null 2>&1; }
+# True when anubis is on PATH.
+anubis_installed()  { command -v anubis >/dev/null 2>&1; }
+# True when the litellm CLI is available (installed as a uv tool).
+litellm_installed() { command -v litellm >/dev/null 2>&1 || { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^litellm'; }; }
+
+# Space-separated list of monitoring tools present, empty when none.
+# Used by the verification step, and by anything that wants to report the
+# stack's observability without re-probing each tool.
+installed_monitoring() {
+    local m=""
+    macmon_installed  && m="${m} macmon"
+    anubis_installed  && m="${m} anubis"
+    litellm_installed && m="${m} litellm"
+    echo "${m# }"
+}
+
+# Install or update one brew-delivered monitoring tool.
+# Args: <formula> <label> <y|n default> <one-line reason>. Present -> checks
+# brew outdated and asks only when an update actually exists; missing -> offers
+# the install at the caller's default.
+_aiStackMonitorBrew() {
+    local formula="$1" label="$2" def="$3" why="$4"
+    command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew."; return 1; }
+    if command -v "$formula" >/dev/null 2>&1; then
+        ok "${label} present: $("$formula" --version 2>/dev/null | head -1)"
+        if brew list "$formula" >/dev/null 2>&1 && [ -n "$(brew outdated "$formula" 2>/dev/null)" ]; then
+            warn "A newer ${label} is available."
+            ask_def "Upgrade ${label} now?" "y" && brew upgrade -y "$formula"
+        else
+            ok "Already the latest version."
+        fi
+        return 0
+    fi
+    echo "    ${why}"
+    if ask_def "Install ${label}?" "$def"; then
+        brew install -y "$formula" && ok "${label} installed." || { fail "brew install ${formula} failed."; return 1; }
+    else
+        warn "Skipping ${label}."
+    fi
+}
+
+# Monitoring step, default YES: macmon — sudoless CPU/GPU/ANE and memory
+# monitoring for Apple Silicon. The one tool here that watches the thing this
+# stack actually stresses, so it is the recommended default.
+installAiStackMacmonMonitoring() {
+    info "installAiStackMacmonMonitoring — macmon (Apple Silicon performance monitor)"
+    _aiStackMonitorBrew macmon "macmon" "y" \
+        "Live CPU/GPU/ANE power and memory — run it beside a model to see what inference costs."
+}
+
+# Monitoring step, default no: Anubis — a scraper-bot firewall.
+# Note it does NOT monitor local inference; it protects a service you host from
+# AI crawlers. Included because it is part of the AI-adjacent toolchain, and
+# described honestly so it is not installed under a wrong assumption.
+installAiStackAnubisMonitoring() {
+    info "installAiStackAnubisMonitoring — Anubis (scraper-bot protection)"
+    _aiStackMonitorBrew anubis "Anubis" "n" \
+        "Protects a hosted service from AI scrapers. It does NOT monitor your local models."
+}
+
+# Monitoring step, default no: LiteLLM — an OpenAI-compatible proxy that logs
+# every request and can export OpenTelemetry traces. Sits in front of the
+# engines, so you can see what an agent actually sent and what it cost.
+# Delivered through uv, like MLX-LM, rather than brew.
+installAiStackLitellmMonitoring() {
+    info "installAiStackLitellmMonitoring — LiteLLM proxy (request logging / OpenTelemetry)"
+    if litellm_installed; then
+        local cur latest
+        cur=$(uv tool list 2>/dev/null | awk '/^litellm /{print $2}' | tr -d 'v')
+        ok "LiteLLM present: ${cur:-unknown}"
+        latest=$(curl -sf --max-time 10 https://pypi.org/pypi/litellm/json 2>/dev/null \
+                 | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])' 2>/dev/null)
+        if [ -n "$latest" ] && [ -n "$cur" ] && [ "$latest" != "$cur" ]; then
+            warn "LiteLLM update available: ${cur} -> ${latest}"
+            ask_def "Update LiteLLM now?" "y" && uv tool upgrade litellm
+        elif [ -z "$latest" ]; then
+            ok "Update check skipped (PyPI unreachable)."
+        else
+            ok "LiteLLM ${cur} is up to date."
+        fi
+        return 0
+    fi
+    echo "    An OpenAI-compatible proxy in front of your engines: logs every request,"
+    echo "    exports OpenTelemetry traces, and gives one endpoint for several models."
+    if ! ask_def "Install the LiteLLM proxy?" "n"; then
+        warn "Skipping LiteLLM."
+        return 0
+    fi
+    installAiStackUv required || { fail "LiteLLM needs uv — not installed."; return 1; }
+    uv tool install "litellm[proxy]" && ok "LiteLLM installed." || { fail "litellm install failed."; return 1; }
+}
+
 # ---------- step: verification -----------------------------------------------
 # Final step: report what is installed — engines, agents, tooling, models.
 # Read-only. Benchmarking lives in aiModelTest.sh, and serving in
@@ -901,6 +1062,10 @@ installAiStackVerification() {
     pi_installed       && ok "Pi:        $(pi --version 2>/dev/null | head -1)"       || warn "Pi:        not installed"
     opencode_installed && ok "OpenCode:  $(opencode --version 2>/dev/null | head -1)" || warn "OpenCode:  not installed"
     claude_installed   && ok "Claude:    $(claude --version 2>/dev/null | head -1)"   || warn "Claude:    not installed (Ollama-only agent)"
+    echo "${BOLD}  Monitoring${RESET}"
+    macmon_installed  && ok "macmon:    $(macmon --version 2>/dev/null | head -1)" || warn "macmon:    not installed"
+    anubis_installed  && ok "Anubis:    $(anubis --version 2>/dev/null | head -1)" || warn "Anubis:    not installed"
+    litellm_installed && ok "LiteLLM:   installed"                                 || warn "LiteLLM:   not installed"
     echo "${BOLD}  Tooling${RESET}"
     command -v uv >/dev/null 2>&1     && ok "uv:        $(uv --version)"                           || warn "uv:        not installed"
 
@@ -963,6 +1128,11 @@ installAiStack() {
     installAiStackLlamacppModels
     installAiStackMlxmlModels
     installAiStackOllamaModels
+
+    # --- monitoring: optional observability, asked before the verdict ---
+    installAiStackMacmonMonitoring
+    installAiStackAnubisMonitoring
+    installAiStackLitellmMonitoring
 
     installAiStackVerification
 }

@@ -16,8 +16,10 @@ already done, and proposes an update only when one genuinely exists — so both
 the script and each individual function can be run any number of times.
 
 Steps carrying an engine name are engine-specific; the rest apply to the whole
-stack. There are two optional layers: the **engines** (which serve tokens) and
-the **coding agents** (what you actually type into).
+stack. There are three optional layers: the **engines** (which serve tokens),
+the **coding agents** (what you type into), and **monitoring** (what watches
+it). Monitoring is asked last, just before the verdict, and is macOS-specific —
+a Debian port will want different tools entirely.
 
 | Function | What | Default / re-run behavior |
 |---|---|---|
@@ -34,6 +36,9 @@ the **coding agents** (what you actually type into).
 | **`installAiStackLlamacppModels`** | GGUF files → `~/Models/llama.cpp` | Skipped unless llama.cpp is installed |
 | **`installAiStackMlxmlModels`** | HF repos → HuggingFace cache | Skipped unless MLX-LM is installed |
 | **`installAiStackOllamaModels`** | registry tags → `~/.ollama` | Skipped unless Ollama is installed. Prunes failed-download leftovers first |
+| **`installAiStackMacmonMonitoring`** | **macmon** — brew | **Default YES.** Sudoless CPU/GPU/ANE and memory monitoring for Apple Silicon — the one tool here that watches what inference actually costs |
+| **`installAiStackAnubisMonitoring`** | **Anubis** — brew | **Default no.** A scraper-bot firewall for a service you *host*; it does **not** monitor local models, and the prompt says so |
+| **`installAiStackLitellmMonitoring`** | **LiteLLM proxy** — uv | **Default no.** OpenAI-compatible proxy in front of the engines: logs every request and exports OpenTelemetry traces |
 | `installAiStackVerification` | Status summary: every engine, the frontend, and the models installed per engine | Pure read/report |
 | `installAiStack` | **Wrapper** — see order below | — |
 
@@ -44,6 +49,7 @@ sanity → disk gate → Homebrew
       → llama.cpp engine → MLX-LM engine → Ollama engine      (at least one!)
       → Pi → OpenCode → Claude Code                     (coding agents)
       → llama.cpp models → MLX-LM models → Ollama models
+      → macmon → Anubis → LiteLLM                      (monitoring, optional)
       → verification
 ```
 

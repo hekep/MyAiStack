@@ -8,6 +8,10 @@
 # in the name are engine-specific; the others apply to the stack as a whole.
 #
 #   uninstallAiStackOllamaModels         the models   <- GATE for everything below
+#   --- monitoring: observational, nothing depends on it (macOS-specific) ---
+#   uninstallAiStackMacmonMonitoring     macmon
+#   uninstallAiStackAnubisMonitoring     Anubis
+#   uninstallAiStackLitellmMonitoring    LiteLLM proxy
 #   --- coding agents: what you type into, they sit above the engines ---
 #   uninstallAiStackClaudeCodingAgent    Claude Code CLI
 #   uninstallAiStackOpenCodeCodingAgent  OpenCode
@@ -194,6 +198,66 @@ uninstallAiStackMlx() {
         else
             ok "Keeping the HuggingFace cache."
         fi
+    fi
+}
+
+# ---------- layer: monitoring -------------------------------------------------
+# Purely observational: nothing in the stack depends on these, so they come off
+# first. macOS-specific, like their install counterparts.
+
+# Remove macmon (Apple Silicon performance monitor).
+# Default No: it is small, useful beside any workload, and unrelated to whether
+# you keep the models — so removing it is rarely what you actually want.
+uninstallAiStackMacmonMonitoring() {
+    info "uninstallAiStackMacmonMonitoring — macmon"
+    if ! command -v macmon >/dev/null 2>&1; then
+        ok "macmon not installed — nothing to do."
+        return 0
+    fi
+    warn "macmon $(macmon --version 2>/dev/null | head -1) at $(command -v macmon)"
+    if ask_def "Uninstall macmon?" "n"; then
+        brew uninstall macmon && ok "macmon removed." || fail "brew uninstall failed."
+    else
+        ok "Keeping macmon."
+    fi
+}
+
+# Remove Anubis (scraper-bot firewall).
+# Default No. If it is fronting a service you host, removing it stops that
+# protection, which has nothing to do with tearing down the local AI stack.
+uninstallAiStackAnubisMonitoring() {
+    info "uninstallAiStackAnubisMonitoring — Anubis"
+    if ! command -v anubis >/dev/null 2>&1; then
+        ok "Anubis not installed — nothing to do."
+        return 0
+    fi
+    warn "Anubis $(anubis --version 2>/dev/null | head -1) at $(command -v anubis)"
+    warn "If it is protecting a hosted service, removing it stops that protection."
+    if ask_def "Uninstall Anubis?" "n"; then
+        brew uninstall anubis && ok "Anubis removed." || fail "brew uninstall failed."
+    else
+        ok "Keeping Anubis."
+    fi
+}
+
+# Remove the LiteLLM proxy (a uv tool).
+# Default No. Offers its config directory separately, since ~/.litellm can hold
+# provider keys you would not want to re-enter.
+uninstallAiStackLitellmMonitoring() {
+    info "uninstallAiStackLitellmMonitoring — LiteLLM proxy"
+    if ! command -v uv >/dev/null 2>&1 || ! uv tool list 2>/dev/null | grep -q '^litellm'; then
+        ok "LiteLLM not installed — nothing to do."
+        return 0
+    fi
+    if ask_def "Uninstall LiteLLM?" "n"; then
+        uv tool uninstall litellm && ok "LiteLLM removed." || fail "LiteLLM removal failed."
+    else
+        ok "Keeping LiteLLM."
+        return 0
+    fi
+    if [ -d "$HOME/.litellm" ]; then
+        warn "LiteLLM config lives in ~/.litellm ($(sizeof "$HOME/.litellm")) — it may hold provider keys."
+        ask_def "Delete ~/.litellm as well?" "n" && { rm -rf "$HOME/.litellm" && ok "~/.litellm deleted."; }
     fi
 }
 
@@ -424,6 +488,8 @@ uninstallAiStackStatus() {
                                       || ok   "Models:  removed"
     { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^mlx-lm'; } \
                                       && warn "mlx-lm:  still installed" || ok "mlx-lm:  removed"
+    command -v macmon >/dev/null 2>&1   && warn "macmon:  still installed" || ok "macmon:  removed"
+    command -v anubis >/dev/null 2>&1   && warn "Anubis:  still installed" || ok "Anubis:  removed"
     command -v pi >/dev/null 2>&1       && warn "Pi:      still installed" || ok "Pi:      removed"
     command -v opencode >/dev/null 2>&1 && warn "OpenCode: still installed" || ok "OpenCode: removed"
     command -v claude >/dev/null 2>&1   && warn "claude:  still installed ($(claude --version 2>/dev/null | head -1))" \
@@ -454,7 +520,12 @@ uninstallAiStack() {
         exit 0
     fi
 
-    # coding agents first — they sit above the engines
+    # monitoring first: nothing depends on it
+    uninstallAiStackMacmonMonitoring
+    uninstallAiStackAnubisMonitoring
+    uninstallAiStackLitellmMonitoring
+
+    # then the coding agents — they sit above the engines
     uninstallAiStackClaudeCodingAgent
     uninstallAiStackOpenCodeCodingAgent
     uninstallAiStackPiCodingAgent
