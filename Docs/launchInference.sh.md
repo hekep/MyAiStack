@@ -15,7 +15,7 @@ three engines.)
 
 | Function | What | Notes |
 |---|---|---|
-| `launchInferenceEngineSelector` | Lists installed engines with their model counts and asks which to launch | **Asked only when more than one engine is installed**; with exactly one it says so and proceeds. Previous choice is the default |
+| `launchInferenceEngineSelector` | Lists engines that are installed **and have at least one model downloaded**, with their model counts | An engine with nothing downloaded cannot be launched, so it is never offered — just named once ("installed but no models downloaded"). Asked only when more than one engine qualifies; with exactly one it says so and proceeds. Previous choice is the default |
 | `launchInferenceModelSelector <engine>` | Numbered menu of the models installed **for that engine**, with on-disk sizes | Ollama reads `ollama list`; llama.cpp scans `~/Models/llama.cpp`; MLX-LM scans the HuggingFace cache |
 | `launchInferenceContextSelector <engine> <model>` | **Numeric menu: 32K / 64K / 128K (default) / 256K / 512K / 1024K** | Larger sizes appear **only when they fit**: weights + estimated KV cache + 2 GB must stay inside the GPU budget. For Ollama it also queries `/api/show` for the model's own ceiling and hides anything beyond it |
 | `launchInferenceNetworkSelector <engine>` | localhost (default) or LAN — **for every engine**, not just Ollama | Refuses non-private addresses, warns that no engine authenticates, notes the DHCP caveat |

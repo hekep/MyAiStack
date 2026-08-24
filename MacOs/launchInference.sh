@@ -172,6 +172,20 @@ mlxmlListInstalled() {
 }
 ollamaListInstalled() { ollama list 2>/dev/null | awk 'NR>1 {print $1}'; }
 
+# engines worth offering: installed AND holding at least one model. An engine
+# with nothing downloaded cannot be launched, so it is never shown.
+enginesWithModels() {
+    local e
+    for e in Llama.cpp MLX-LM Ollama; do
+        case "$e" in
+            Llama.cpp) llamacpp_installed || continue ;;
+            MLX-LM)    mlxml_installed    || continue ;;
+            Ollama)    ollama_installed   || continue ;;
+        esac
+        [ "$(engineListInstalled "$e" | grep -c . || true)" -gt 0 ] && echo "$e"
+    done
+}
+
 engineListInstalled() {
     case "$1" in
         Llama.cpp) llamacppListInstalled ;;
@@ -199,27 +213,40 @@ engineModelSizeGb() {
 # ---------- 1. engine selector -----------------------------------------------
 # Prints the chosen engine on stdout. Asked only when more than one is present.
 launchInferenceEngineSelector() {
-    local engines=() e
-    llamacpp_installed && engines+=("Llama.cpp")
-    mlxml_installed    && engines+=("MLX-LM")
-    ollama_installed   && engines+=("Ollama")
+    local engines=() e empty=""
+    while IFS= read -r e; do [ -n "$e" ] && engines+=("$e"); done < <(enginesWithModels)
+
+    # engines that are installed but have nothing to run — named, not offered
+    for e in Llama.cpp MLX-LM Ollama; do
+        case "$e" in
+            Llama.cpp) llamacpp_installed || continue ;;
+            MLX-LM)    mlxml_installed    || continue ;;
+            Ollama)    ollama_installed   || continue ;;
+        esac
+        [ "$(engineListInstalled "$e" | grep -c . || true)" -eq 0 ] && empty="${empty} ${e}"
+    done
+    [ -n "$empty" ] && warn "Installed but no models downloaded, so not offered:${empty}"
 
     if [ "${#engines[@]}" -eq 0 ]; then
-        fail "No inference engine installed — run ./install.sh first."
+        if [ -n "$empty" ]; then
+            fail "No engine has any models — run ./install.sh to download one."
+        else
+            fail "No inference engine installed — run ./install.sh first."
+        fi
         return 1
     fi
     if [ "${#engines[@]}" -eq 1 ]; then
-        ok "Only one engine installed: ${engines[0]}"
+        ok "Only one engine has models: ${engines[0]}"
         echo "${engines[0]}"
         return 0
     fi
 
     echo >&2
-    echo "${BOLD}Installed engines:${RESET}" >&2
+    echo "${BOLD}Engines with downloaded models:${RESET}" >&2
     local i=1 n
     for e in "${engines[@]}"; do
         n=$(engineListInstalled "$e" | grep -c . || true)
-        printf "  %d) %-12s %s model(s) installed\n" "$i" "$e" "${n:-0}" >&2
+        printf "  %d) %-12s %s model(s)\n" "$i" "$e" "${n:-0}" >&2
         i=$((i+1))
     done
     local def sel

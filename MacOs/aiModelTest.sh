@@ -46,18 +46,7 @@ aiModelTestReset() {
     G_TOKENS=0; G_TIME=0; G_TPS=0
 }
 
-# engines that actually have something to test
-enginesWithModels() {
-    local e
-    for e in Llama.cpp MLX-LM Ollama; do
-        case "$e" in
-            Llama.cpp) llamacpp_installed || continue ;;
-            MLX-LM)    mlxml_installed    || continue ;;
-            Ollama)    ollama_installed   || continue ;;
-        esac
-        [ "$(engineListInstalled "$e" | grep -c . || true)" -gt 0 ] && echo "$e"
-    done
-}
+# enginesWithModels() comes from launchInference.sh (shared filter)
 
 # ---------- engine selector ---------------------------------------------------
 aiModelTestEngineSelector() {
