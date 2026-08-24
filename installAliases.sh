@@ -29,10 +29,27 @@ warn()  { echo "${YELLOW} ! ${RESET} $*"; }
 # Print an error line for something that was attempted and failed.
 fail()  { echo "${RED} ✗ ${RESET} $*"; }
 
+# Print a usage message for a function called without its arguments, return 2.
+# Args: <signature> [detail lines...]. Anything here can be called standalone
+# from a shell, so a bare call must explain itself rather than misbehave.
+aiStackUsage() {
+    local sig="$1"; shift
+    # fail() exists in the wizard scripts but not in every file that needs this
+    if command -v fail >/dev/null 2>&1; then fail "usage: ${sig}"
+    else echo "✗ usage: ${sig}" >&2; fi
+    local l
+    for l in "$@"; do echo "         ${l}" >&2; done
+    return 2
+}
+
 # Ask a yes/no question where Enter picks the caller's default.
 # Args: <question> <y|n>. Reads /dev/tty so it works with piped output, and
 # treats a missing terminal as the default rather than hanging.
 ask_def() {
+    if [ $# -lt 2 ]; then
+        aiStackUsage "ask_def <question> <y|n>" "example : ask_def "Install it?" y"
+        return 2
+    fi
     local answer hint
     [ "$2" = "y" ] && hint="[Y/n]" || hint="[y/N]"
     printf "\n%s%s%s %s " "${BOLD}" "$1" "${RESET}" "$hint"
@@ -79,6 +96,10 @@ BLOCK
 # Args: <rc file>. Leaves the file untouched when no block is present, so it is
 # safe to call before writing a fresh one.
 rcStrip() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "rcStrip <rc-file>" "rc-file : e.g. ~/.zshrc — removes this project's block, leaves the rest" "example : rcStrip ~/.zshrc"
+        return 2
+    fi
     local rc="$1"
     [ -f "$rc" ] || return 0
     grep -qE "^(${BEGIN}|${LEGACY_BEGIN})$" "$rc" 2>/dev/null || return 0
@@ -100,6 +121,10 @@ PYEOF
 # Args: <rc file>. Existing blocks are replaced rather than duplicated, which
 # is what makes re-running this script safe.
 rcInstall() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "rcInstall <rc-file>" "rc-file : e.g. ~/.zshrc — backs it up, then writes the block" "example : rcInstall ~/.zshrc"
+        return 2
+    fi
     local rc="$1"
     if [ -f "$rc" ]; then
         cp "$rc" "${rc}.aiStack.bak"

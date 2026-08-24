@@ -58,6 +58,19 @@ warn()  { echo "${YELLOW} ! ${RESET} $*"; }
 # Print an error line for something that was attempted and failed.
 fail()  { echo "${RED} ✗ ${RESET} $*"; }
 
+# Print a usage message for a function called without its arguments, return 2.
+# Args: <signature> [detail lines...]. Anything here can be called standalone
+# from a shell, so a bare call must explain itself rather than misbehave.
+aiStackUsage() {
+    local sig="$1"; shift
+    # fail() exists in the wizard scripts but not in every file that needs this
+    if command -v fail >/dev/null 2>&1; then fail "usage: ${sig}"
+    else echo "✗ usage: ${sig}" >&2; fi
+    local l
+    for l in "$@"; do echo "         ${l}" >&2; done
+    return 2
+}
+
 # Ask a yes/no question, looping until the answer is unambiguous.
 # Reads /dev/tty so the prompt survives piped output, and aborts when there is
 # no terminal. Returns 0 for yes, 1 for no; no Enter-default.
@@ -78,6 +91,10 @@ ask() {
 # Args: <question> <y|n>; the [Y/n] or [y/N] hint reflects it. Optional installs
 # pass "n", expected ones pass "y", so a re-run is mostly Enter.
 ask_def() {
+    if [ $# -lt 2 ]; then
+        aiStackUsage "ask_def <question> <y|n>" "example : ask_def "Install it?" y"
+        return 2
+    fi
     local answer hint
     [ "$2" = "y" ] && hint="[Y/n]" || hint="[y/N]"
     while true; do
@@ -106,12 +123,16 @@ free_gb() { df -g /System/Volumes/Data | awk 'NR==2 {print $4}'; }
 TAG_CACHE_DIR="$HOME/.cache/ollama-tag-check"
 # Path of the cache entry for one model tag's availability probe.
 # Args: <tag>. Slashes and colons become underscores so any tag is a filename.
-tag_cache_file() { echo "$TAG_CACHE_DIR/$(echo "$1" | tr ':/' '__')"; }
+tag_cache_file() { [ $# -ge 1 ] || { aiStackUsage "tag_cache_file <tag>" "example : tag_cache_file qwen3.6:35b-a3b"; return 2; }; echo "$TAG_CACHE_DIR/$(echo "$1" | tr ':/' '__')"; }
 # Probe whether one model tag exists upstream, caching the result for 24 h.
 # Args: <tag>. A tag containing "/" is a HuggingFace repo, otherwise an Ollama
 # registry tag. Meant to be run in parallel for a whole menu; the cache makes
 # the first render ~2 s and every later one instant.
 tag_check_prefetch() {   # probe one tag and cache the HTTP status
+    if [ $# -lt 1 ]; then
+        aiStackUsage "tag_check_prefetch <tag>" "tag     : ollama tag, or org/repo[:quant] for HuggingFace"
+        return 2
+    fi
     local f code name="${1%%:*}" t="${1#*:}" url
     f=$(tag_cache_file "$1")
     mkdir -p "$TAG_CACHE_DIR"
@@ -127,6 +148,10 @@ tag_check_prefetch() {   # probe one tag and cache the HTTP status
 # Args: <tag>. An unreachable network (000/empty) counts as available: better to
 # offer a model and fail at download than to hide everything while offline.
 tag_available() {        # 200 = exists; 000/empty (offline) = benefit of the doubt
+    if [ $# -lt 1 ]; then
+        aiStackUsage "tag_available <tag>" "run tag_check_prefetch <tag> first"
+        return 2
+    fi
     local c
     c=$(cat "$(tag_cache_file "$1")" 2>/dev/null)
     [ "$c" = "200" ] || [ "$c" = "000" ] || [ -z "$c" ]
@@ -182,7 +207,7 @@ ollama_server_up() { curl -sf "http://${OLLAMA_API}:11434/api/version" >/dev/nul
 lan_ip() { ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null; }
 
 # True when Ollama already has this exact tag. Args: <tag>.
-model_installed() { ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$1"; }
+model_installed() { [ $# -ge 1 ] || { aiStackUsage "model_installed <ollama-tag>" "example : model_installed qwen2.5-coder:7b"; return 2; }; ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$1"; }
 
 # ---------- engine detection --------------------------------------------------
 # True when llama.cpp is installed (llama-cli or llama-server on PATH).
@@ -207,6 +232,10 @@ installed_engines() {
 # Args: <GB needed> <what for>. Returns 1 when short, printing both numbers.
 # Called immediately before each pull, not once at the start.
 require_disk() {
+    if [ $# -lt 2 ]; then
+        aiStackUsage "require_disk <GB-needed> <what-for>" "example : require_disk 25 qwen3.6-plus-headroom"
+        return 2
+    fi
     local need=$1 what=$2 have
     have=$(free_gb)
     if [ "$have" -lt "$need" ]; then
@@ -628,6 +657,10 @@ ollamaListInstalled() {
 # each time), reports the real error rather than a guess, and keeps resumable
 # data while cleaning up after a permanent failure.
 ollamaPullModel() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "ollamaPullModel <ollama-tag>" "example : ollamaPullModel qwen2.5-coder:3b"
+        return 2
+    fi
     local tag="$1" pull_log attempt ok_pull=0 last_err=""
     info "Pulling ${tag}..."
     pull_log=$(mktemp "${TMPDIR:-/tmp}/ollama-pull.XXXXXX")
@@ -667,6 +700,10 @@ LLAMACPP_MODEL_DIR="${LLAMACPP_MODEL_DIR:-$HOME/Models/llama.cpp}"
 # Args: <tag>. The encoding is reversible, which is how the launcher turns files
 # on disk back into tags without keeping a separate index.
 llamacppLocalFile() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "llamacppLocalFile <tag>" "tag     : hf-repo:QUANT"
+        return 2
+    fi
     echo "${LLAMACPP_MODEL_DIR}/$(printf '%s' "$1" | sed 's|/|__|g; s|:|@|').gguf"
 }
 # List downloaded GGUFs as tags by reversing that filename encoding.
@@ -684,6 +721,10 @@ llamacppListInstalled() {
 # uploaders name files differently, then fetches with curl -C - so an interrupted
 # download resumes instead of restarting — the thing Ollama's HF path cannot do.
 llamacppPullModel() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "llamacppPullModel <tag>" "tag     : hf-repo:QUANT — downloads the GGUF into ~/Models/llama.cpp"
+        return 2
+    fi
     local tag="$1" repo="${tag%:*}" quant="${tag##*:}" out file url
     out=$(llamacppLocalFile "$tag")
     mkdir -p "$LLAMACPP_MODEL_DIR"
@@ -737,6 +778,10 @@ mlxmlListInstalled() {
 # Args: <repo>. Uses huggingface_hub via 'uv run --with', so nothing extra is
 # installed permanently, and already-fetched shards resume.
 mlxmlPullModel() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "mlxmlPullModel <hf-repo>" "example : mlxmlPullModel mlx-community/Qwen3.6-35B-A3B-4bit"
+        return 2
+    fi
     local tag="$1"
     command -v uv >/dev/null 2>&1 || { fail "uv is required to download MLX models."; return 1; }
     info "Downloading ${tag} into the HuggingFace cache (resumable)..."
@@ -761,6 +806,10 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 
 # modelListFile <host_ram_gb> — largest tier <= host RAM (smallest if below all)
 modelListFile() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "modelListFile <host-ram-gb>" "example : modelListFile 48"
+        return 2
+    fi
     local ram="$1" dir f tier best="" smallest=""
     dir="${REPO_ROOT}/ModelLists/${MODEL_LIST_ENGINE}"
     [ -d "$dir" ] || return 1
@@ -780,6 +829,10 @@ modelListFile() {
 
 # parseModelJson <file> — emit "tag|size_gb|description" per model
 parseModelJson() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "parseModelJson <catalog.json>" "example : parseModelJson ModelLists/Ollama/48_GB_Ram.json"
+        return 2
+    fi
     if command -v python3 >/dev/null 2>&1; then
         python3 - "$1" <<'PYEOF'
 import json, sys
@@ -817,6 +870,10 @@ loadModelCatalog() {
 # catalog, hides models that do not fit the GPU limit or free disk, are already
 # installed, or do not exist upstream — then loops until you answer N.
 aiStackModelMenu() {
+    if [ $# -lt 3 ]; then
+        aiStackUsage "aiStackModelMenu <EngineFolder> <list-fn> <pull-fn>" "EngineFolder : Ollama | Llama.cpp | MLX-LM" "example : aiStackModelMenu Ollama ollamaListInstalled ollamaPullModel"
+        return 2
+    fi
     local engine="$1" list_fn="$2" pull_fn="$3"
 
     [ -z "${TOTAL_GB:-}" ] && TOTAL_GB=$(( $(sysctl -n hw.memsize) / 1073741824 ))
@@ -970,6 +1027,10 @@ installed_monitoring() {
 # brew outdated and asks only when an update actually exists; missing -> offers
 # the install at the caller's default.
 _aiStackMonitorBrew() {
+    if [ $# -lt 4 ]; then
+        aiStackUsage "_aiStackMonitorBrew <formula> <label> <y|n> <reason>" "example : _aiStackMonitorBrew macmon macmon n reason-text"
+        return 2
+    fi
     local formula="$1" label="$2" def="$3" why="$4"
     command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew."; return 1; }
     if command -v "$formula" >/dev/null 2>&1; then

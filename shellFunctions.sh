@@ -61,10 +61,27 @@ _aiStackOsDir() {
 }
 AI_STACK_OS_DIR="$(_aiStackOsDir)"
 
+# Print a usage message for a function called without its arguments, return 2.
+# Args: <signature> [detail lines...]. Anything here can be called standalone
+# from a shell, so a bare call must explain itself rather than misbehave.
+aiStackUsage() {
+    local sig="$1"; shift
+    # fail() exists in the wizard scripts but not in every file that needs this
+    if command -v fail >/dev/null 2>&1; then fail "usage: ${sig}"
+    else echo "✗ usage: ${sig}" >&2; fi
+    local l
+    for l in "$@"; do echo "         ${l}" >&2; done
+    return 2
+}
+
 # Run one function from one script, in its own bash process.
 # Args: <script> <function> [args...]. Keeps helper names out of your shell and
 # guarantees bash semantics; the terminal is inherited, so prompts still work.
 _aiStackRun() {
+    if [ $# -lt 2 ]; then
+        aiStackUsage "_aiStackRun <script> <function> [args...]" "script   : absolute path to a MacOs/*.sh implementation" "function : a function defined in it" "example  : _aiStackRun $AI_STACK_OS_DIR/install.sh installAiStackVerification"
+        return 2
+    fi
     local script="$1" func="$2"
     shift 2
     if [ ! -f "$script" ]; then
@@ -82,6 +99,10 @@ _aiStackRun() {
 # Args: <script> <name-prefix>. Reads the function names out of the file, so
 # adding a step to a script makes it available in the shell with no extra work.
 _aiStackDefine() {
+    if [ $# -lt 2 ]; then
+        aiStackUsage "_aiStackDefine <script> <name-prefix>" "example  : _aiStackDefine $AI_STACK_OS_DIR/install.sh installAiStack"
+        return 2
+    fi
     local script="$1" prefix="$2" fn
     [ -f "$script" ] || return 0
     for fn in $(grep -oE "^${prefix}[A-Za-z]*\(\)" "$script" 2>/dev/null | tr -d '()'); do

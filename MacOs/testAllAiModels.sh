@@ -19,6 +19,19 @@ set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "${DIR}/aiModelTest.sh"
 
+# Print a usage message for a function called without its arguments, return 2.
+# Args: <signature> [detail lines...]. Anything here can be called standalone
+# from a shell, so a bare call must explain itself rather than misbehave.
+aiStackUsage() {
+    local sig="$1"; shift
+    # fail() exists in the wizard scripts but not in every file that needs this
+    if command -v fail >/dev/null 2>&1; then fail "usage: ${sig}"
+    else echo "✗ usage: ${sig}" >&2; fi
+    local l
+    for l in "$@"; do echo "         ${l}" >&2; done
+    return 2
+}
+
 # ---------- free the hardware between models ---------------------------------
 # This is the difference between a clean sweep and an out-of-memory crash: a
 # 30 GB model left resident while the next 30 GB model loads takes the machine
@@ -79,6 +92,10 @@ freeMemGb() {
 # Deliberately looser than the install-time rule: teardown guarantees only one
 # model is resident, so the generous KV allowance would cause false skips.
 modelFitsNow() {
+    if [ $# -lt 2 ]; then
+        aiStackUsage "modelFitsNow <engine> <model>" "engine  : Llama.cpp | MLX-LM | Ollama" "model   : a tag for that engine — list: engineListInstalled <engine>" "true when weights + 4 GB fits the GPU budget"
+        return 2
+    fi
     local engine="$1" model="$2" size need gpu limit total
     size=$(engineModelSizeGb "$engine" "$model"); [ "${size:-0}" -lt 1 ] && size=1
     total=$(( $(sysctl -n hw.memsize) / 1073741824 ))

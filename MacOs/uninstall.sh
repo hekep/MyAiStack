@@ -51,10 +51,27 @@ warn()  { echo "${YELLOW} ! ${RESET} $*"; }
 # Print an error line — a removal that was attempted and did not work.
 fail()  { echo "${RED} ✗ ${RESET} $*"; }
 
+# Print a usage message for a function called without its arguments, return 2.
+# Args: <signature> [detail lines...]. Anything here can be called standalone
+# from a shell, so a bare call must explain itself rather than misbehave.
+aiStackUsage() {
+    local sig="$1"; shift
+    # fail() exists in the wizard scripts but not in every file that needs this
+    if command -v fail >/dev/null 2>&1; then fail "usage: ${sig}"
+    else echo "✗ usage: ${sig}" >&2; fi
+    local l
+    for l in "$@"; do echo "         ${l}" >&2; done
+    return 2
+}
+
 # Ask a yes/no question, looping until the answer is unambiguous.
 # Reads /dev/tty so the prompt survives piped output; aborts if there is no
 # terminal at all. Returns 0 for yes, 1 for no, with no Enter-default.
 ask() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "ask <question>" "no default — answer y or n explicitly"
+        return 2
+    fi
     local answer
     while true; do
         printf "\n%s%s%s [y/n] " "${BOLD}" "$1" "${RESET}"
@@ -71,6 +88,10 @@ ask() {
 # Args: <question> <y|n>. The hint shown ([Y/n] or [y/N]) reflects that default.
 # Destructive steps pass "n" so a stray Enter can never delete anything.
 ask_def() {
+    if [ $# -lt 2 ]; then
+        aiStackUsage "ask_def <question> <y|n>" "example : ask_def "Remove it?" n"
+        return 2
+    fi
     local answer hint
     [ "$2" = "y" ] && hint="[Y/n]" || hint="[y/N]"
     while true; do
@@ -91,7 +112,7 @@ ask_def() {
 free_gb() { df -g /System/Volumes/Data | awk 'NR==2 {print $4}'; }
 # Human-readable size of a path ('du -sh'), empty when it does not exist.
 # Shown inside prompts so a deletion is never agreed to blind.
-sizeof()  { du -sh "$1" 2>/dev/null | cut -f1; }
+sizeof()  { [ $# -ge 1 ] || { aiStackUsage "sizeof <path>" "example : sizeof ~/.ollama"; return 2; }; du -sh "$1" 2>/dev/null | cut -f1; }
 # True when the Ollama API answers on localhost.
 # Model listing and removal both need the daemon, so several layers check this
 # before deciding whether to start one temporarily.

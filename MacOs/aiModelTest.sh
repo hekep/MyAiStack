@@ -102,7 +102,15 @@ aiModelTestPromptSelector() {
 # Choose which of the engine's models to test; prints the tag on stdout.
 # Args: <engine>. Shares launchInference.sh's selector so both tools show the
 # same menu rather than drifting apart.
-aiModelTestModelSelector() { launchInferenceModelSelector "$1"; }
+aiModelTestModelSelector() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "aiModelTestModelSelector <engine>" \
+            "$(_hintEngine)" \
+            "example : aiModelTestModelSelector Ollama"
+        return 2
+    fi
+    launchInferenceModelSelector "$1"
+}
 
 # ---------- make the engine serve this model ---------------------------------
 # Make the engine serve the chosen model, starting or re-pointing it as needed.
@@ -379,6 +387,10 @@ PYEOF
 # Args: <response json>. Returns 0 for a get_weather call carrying the required
 # argument, 1 when the model answered in prose instead (and prints what it said).
 aiModelTestToolCallParse() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "aiModelTestToolCallParse <response-json>" "internal: judges one /v1/chat/completions reply for a tool call"
+        return 2
+    fi
     python3 - "$1" <<'PYEOF'
 import json, sys
 r = json.loads(sys.argv[1])

@@ -44,6 +44,19 @@ detectOsFolder() {
     esac
 }
 
+# Print a usage message for a function called without its arguments, return 2.
+# Args: <signature> [detail lines...]. Anything here can be called standalone
+# from a shell, so a bare call must explain itself rather than misbehave.
+aiStackUsage() {
+    local sig="$1"; shift
+    # fail() exists in the wizard scripts but not in every file that needs this
+    if command -v fail >/dev/null 2>&1; then fail "usage: ${sig}"
+    else echo "✗ usage: ${sig}" >&2; fi
+    local l
+    for l in "$@"; do echo "         ${l}" >&2; done
+    return 2
+}
+
 # ---------- dispatch ----------------------------------------------------------
 # Dispatch to the OS-specific implementation of a script.
 # Args: <repo-root> <script-name> [args...] — replaces this process with
@@ -51,6 +64,10 @@ detectOsFolder() {
 # Exits 1 with a clear message when the OS is unsupported or that folder has no
 # such script yet (e.g. running install.sh on Debian before it is ported).
 os_exec() {
+    if [ $# -lt 2 ]; then
+        aiStackUsage "os_exec <repo-root> <script-name> [args...]" "repo-root : the MyAiStack checkout" "script    : install.sh | launchInference.sh | ..." "example   : os_exec /path/to/MyAiStack install.sh"
+        return 2
+    fi
     local root="$1" script="$2" folder target
     shift 2
     folder=$(detectOsFolder) || exit 1

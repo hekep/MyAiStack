@@ -47,6 +47,10 @@ fail()  { echo "${RED} ✗ ${RESET} $*" >&2; }
 # For the expected path of an action you already opted into (restart the server
 # you asked to launch). Returns 0 for yes, 1 for no.
 ask_yn() {   # Enter = yes
+    if [ $# -lt 1 ]; then
+        aiStackUsage "ask_yn <question>" "Enter means YES" "example : ask_yn "Restart it?""
+        return 2
+    fi
     local a; printf "%s%s%s [Y/n] " "${BOLD}" "$1" "${RESET}" >&2
     read -r a </dev/tty || return 1
     case "$a" in ""|[Yy]|[Yy]es) return 0 ;; *) return 1 ;; esac
@@ -55,6 +59,10 @@ ask_yn() {   # Enter = yes
 # For anything that could lose work — closing an app, stopping someone else's
 # engine — so holding Enter never destroys anything. Returns 0 for yes.
 ask_ny() {   # Enter = no
+    if [ $# -lt 1 ]; then
+        aiStackUsage "ask_ny <question>" "Enter means NO" "example : ask_ny "Close it?""
+        return 2
+    fi
     local a; printf "%s%s%s [y/N] " "${BOLD}" "$1" "${RESET}" >&2
     read -r a </dev/tty || return 1
     case "$a" in [Yy]|[Yy]es) return 0 ;; *) return 1 ;; esac
@@ -63,6 +71,10 @@ ask_ny() {   # Enter = no
 # Args: <question> <default>. Enter (or no terminal) yields the default, which
 # is how every selector here becomes a single keystroke on a re-run.
 ask_val() {  # free-form with default; echoes the answer
+    if [ $# -lt 2 ]; then
+        aiStackUsage "ask_val <question> <default>" "example : ask_val "Context tokens" 32768"
+        return 2
+    fi
     local a; printf "%s%s%s [%s]: " "${BOLD}" "$1" "${RESET}" "$2" >&2
     read -r a </dev/tty || { echo "$2"; return; }
     echo "${a:-$2}"
@@ -73,11 +85,15 @@ SETTINGS_FILE="$HOME/.launchInference.conf"
 # Read one persisted setting from ~/.launchInference.conf.
 # Args: <key>. Prints the value, or nothing when unset.
 # This is what makes the previous run's choice the next run's default.
-tune_get() { [ -f "$SETTINGS_FILE" ] && sed -n "s/^$1=//p" "$SETTINGS_FILE" | tail -1; }
+tune_get() { [ $# -ge 1 ] || { aiStackUsage "tune_get <key>" "reads ~/.launchInference.conf" "example : tune_get CTX_Ollama"; return 2; }; [ -f "$SETTINGS_FILE" ] && sed -n "s/^$1=//p" "$SETTINGS_FILE" | tail -1; }
 # Persist one setting to ~/.launchInference.conf, replacing any earlier value.
 # Args: <key> <value>. Rewrites the file rather than appending, so the file
 # does not grow one line per launch.
 tune_set() {
+    if [ $# -lt 2 ]; then
+        aiStackUsage "tune_set <key> <value>" "example : tune_set CTX_Ollama 65536"
+        return 2
+    fi
     local tmp; tmp=$(grep -v "^$1=" "$SETTINGS_FILE" 2>/dev/null)
     { [ -n "$tmp" ] && printf '%s\n' "$tmp"; printf '%s=%s\n' "$1" "$2"; } > "$SETTINGS_FILE"
 }
@@ -113,7 +129,9 @@ lan_ip() { ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/n
 # bash "parameter null or not set".
 aiStackUsage() {
     local sig="$1"; shift
-    fail "usage: ${sig}"
+    # fail() exists in the wizard scripts but not in every file that needs this
+    if command -v fail >/dev/null 2>&1; then fail "usage: ${sig}"
+    else echo "✗ usage: ${sig}" >&2; fi
     local l
     for l in "$@"; do echo "         ${l}" >&2; done
     return 2
@@ -142,6 +160,10 @@ claude_installed()   { command -v claude >/dev/null 2>&1; }
 # engine here serves; Claude Code needs the Anthropic Messages API, which only
 # Ollama provides. This is the single rule that filters the agent menu.
 agent_supports_engine() {   # $1 agent, $2 engine
+    if [ $# -lt 2 ]; then
+        aiStackUsage "agent_supports_engine <agent> <engine>" "agent   : Pi | OpenCode | Claude" "engine  : Llama.cpp | MLX-LM | Ollama" "example : agent_supports_engine Claude Ollama"
+        return 2
+    fi
     case "$1" in
         Pi|OpenCode) return 0 ;;
         Claude)      [ "$2" = "Ollama" ] ;;
@@ -152,6 +174,10 @@ agent_supports_engine() {   # $1 agent, $2 engine
 # Args: <agent>. Shown next to an installed-but-unusable agent so it is clear
 # the option was withheld deliberately rather than forgotten.
 agent_reason() {            # why an agent cannot be used with an engine
+    if [ $# -lt 1 ]; then
+        aiStackUsage "agent_reason <agent>" "agent   : Pi | OpenCode | Claude"
+        return 2
+    fi
     case "$1" in
         Claude) echo "needs the Anthropic API — only Ollama serves it" ;;
         *)      echo "incompatible" ;;
@@ -161,6 +187,10 @@ agent_reason() {            # why an agent cannot be used with an engine
 # The port an engine serves on: Ollama 11434, llama.cpp 8080, MLX-LM 8081.
 # Args: <engine>. Fixed per engine so several scripts agree without config.
 engine_port() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "engine_port <engine>" "engine  : Llama.cpp | MLX-LM | Ollama" "example : engine_port Ollama   -> 11434"
+        return 2
+    fi
     case "$1" in
         Llama.cpp) echo "$LLAMACPP_PORT" ;;
         MLX-LM)    echo "$MLX_PORT" ;;
@@ -172,6 +202,10 @@ engine_port() {
 # on both /health and /v1/models while a model is still loading — treating
 # "port open" as "ready" makes the first request fail.
 engine_up() {   # $1 engine, $2 host — is it up AND ready to infer?
+    if [ $# -lt 2 ]; then
+        aiStackUsage "engine_up <engine> <host>" "engine  : Llama.cpp | MLX-LM | Ollama" "host    : 127.0.0.1 or a LAN IP"
+        return 2
+    fi
     local p; p=$(engine_port "$1")
     case "$1" in
         Ollama)    curl -sf --max-time 3 "http://${2}:${p}/api/version" >/dev/null 2>&1 ;;
@@ -280,6 +314,10 @@ enginesWithModels() {
 # List the models installed for one engine, one tag per line.
 # Args: <engine>. Dispatches to the per-engine lister so callers stay generic.
 engineListInstalled() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "engineListInstalled <engine>" "engine  : Llama.cpp | MLX-LM | Ollama"
+        return 2
+    fi
     case "$1" in
         Llama.cpp) llamacppListInstalled ;;
         MLX-LM)    mlxmlListInstalled ;;
@@ -291,6 +329,10 @@ engineListInstalled() {
 # Args: <engine> <model>. Reads the .gguf file, the HF cache directory, or
 # 'ollama list' as appropriate. Feeds the context and fit calculations.
 engineModelSizeGb() {
+    if [ $# -lt 2 ]; then
+        aiStackUsage "engineModelSizeGb <engine> <model>" "engine  : Llama.cpp | MLX-LM | Ollama" "model   : a tag for that engine — list: engineListInstalled <engine>"
+        return 2
+    fi
     local engine="$1" tag="$2" f d
     case "$engine" in
         Llama.cpp)
@@ -300,8 +342,29 @@ engineModelSizeGb() {
             d="${MLX_HF_CACHE}/models--$(printf '%s' "$tag" | sed 's|/|--|')"
             [ -d "$d" ] && du -sm "$d" 2>/dev/null | awk '{printf "%d", $1/1024}' || echo 0 ;;
         Ollama)
-            ollama list 2>/dev/null | awk -v t="$tag" '$1==t {print ($4=="GB")? $3 : 1; exit}' \
-                | awk '{printf "%d", $1}' ;;
+            # prefer the daemon, but fall back to summing the manifest's layer
+            # sizes: a model's size is a fact about the disk, not about whether
+            # ollama happens to be running
+            local via_daemon
+            via_daemon=$(ollama list 2>/dev/null | awk -v t="$tag" '$1==t {print ($4=="GB")? $3 : 1; exit}' \
+                         | awk '{printf "%d", $1}')
+            if [ -n "$via_daemon" ] && [ "$via_daemon" != "0" ]; then
+                echo "$via_daemon"; return 0
+            fi
+            local name="${tag%%:*}" ver="${tag##*:}" mf
+            mf="$HOME/.ollama/models/manifests/registry.ollama.ai/library/${name}/${ver}"
+            [ -f "$mf" ] || mf=$(find "$HOME/.ollama/models/manifests" -type f -path "*${name}/${ver}" 2>/dev/null | head -1)
+            if [ -f "$mf" ]; then
+                python3 -c '
+import json,sys
+try:
+    d=json.load(open(sys.argv[1]))
+    t=sum(l.get("size",0) for l in d.get("layers",[]))
+    print(int(t/1073741824))
+except Exception: print(0)' "$mf"
+            else
+                echo 0
+            fi ;;
     esac
 }
 
@@ -862,6 +925,10 @@ launchInferenceStartAgent() {
 # model tiers to the local model, puts a small model on the background tier when
 # one exists, and offers continue/resume when this directory has sessions.
 launchInferenceAgentClaude() {
+    if [ $# -lt 2 ]; then
+        aiStackUsage "launchInferenceAgentClaude <engine> <model>" "engine  : Ollama only — Claude Code needs the Anthropic API" "model   : a tag for that engine — list: engineListInstalled <engine>"
+        return 2
+    fi
     local engine="$1" model="$2" endpoint="${LAUNCH_ENDPOINT:-}"
     if [ "$engine" != "Ollama" ]; then
         fail "Claude Code needs the Anthropic API — ${engine} does not serve it."
@@ -901,6 +968,10 @@ launchInferenceAgentClaude() {
 # one — and makes sure the local-models plugin is present. Pi discovers models
 # itself, so the model is picked inside Pi with /models.
 launchInferenceAgentPi() {
+    if [ $# -lt 2 ]; then
+        aiStackUsage "launchInferenceAgentPi <engine> <model>" "engine  : Llama.cpp | MLX-LM | Ollama" "model   : a tag for that engine — list: engineListInstalled <engine>"
+        return 2
+    fi
     local engine="$1" model="$2" endpoint="${LAUNCH_ENDPOINT:-}" cfg="$HOME/.pi/agent/local-models.json"
     mkdir -p "$(dirname "$cfg")"
     if [ -f "$cfg" ] && ! grep -q "\"${endpoint}\"" "$cfg" 2>/dev/null; then
@@ -923,6 +994,10 @@ launchInferenceAgentPi() {
 # the old file) with baseURL inside "options" — OpenCode ignores it anywhere
 # else — keyed by the id the endpoint really advertises.
 launchInferenceAgentOpenCode() {
+    if [ $# -lt 2 ]; then
+        aiStackUsage "launchInferenceAgentOpenCode <engine> <model>" "engine  : Llama.cpp | MLX-LM | Ollama" "model   : a tag for that engine — list: engineListInstalled <engine>"
+        return 2
+    fi
     local engine="$1" model="$2" endpoint="${LAUNCH_ENDPOINT:-}" cfg="$HOME/.config/opencode/opencode.json" mid
     mid=$(endpointModelId); [ -z "$mid" ] && mid="$model"
     mkdir -p "$(dirname "$cfg")"

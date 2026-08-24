@@ -43,11 +43,28 @@ warn()  { echo "${YELLOW} ! ${RESET} $*"; }
 # Only for things that did not work; a declined question is a warn, not a fail.
 fail()  { echo "${RED} ✗ ${RESET} $*"; }
 
+# Print a usage message for a function called without its arguments, return 2.
+# Args: <signature> [detail lines...]. Anything here can be called standalone
+# from a shell, so a bare call must explain itself rather than misbehave.
+aiStackUsage() {
+    local sig="$1"; shift
+    # fail() exists in the wizard scripts but not in every file that needs this
+    if command -v fail >/dev/null 2>&1; then fail "usage: ${sig}"
+    else echo "✗ usage: ${sig}" >&2; fi
+    local l
+    for l in "$@"; do echo "         ${l}" >&2; done
+    return 2
+}
+
 # Ask a yes/no question on the terminal and loop until the answer is clear.
 # Reads from /dev/tty so piping stdout does not break the prompt.
 # Returns 0 for yes, 1 for no; no Enter-default, since every step here deletes
 # something.
 ask() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "ask <question>" "no default — every step here deletes something"
+        return 2
+    fi
     local answer
     while true; do
         printf "\n%s%s%s [y/n] " "${BOLD}" "$1" "${RESET}"
@@ -62,7 +79,7 @@ ask() {
 
 # Human-readable size of a file or directory ('du -sh').
 # Args: <path>. Empty output for a missing path, so prompts stay readable.
-sizeof() { du -sh "$1" 2>/dev/null | cut -f1; }
+sizeof() { [ $# -ge 1 ] || { aiStackUsage "sizeof <path>" "example : sizeof ~/Library/Caches"; return 2; }; du -sh "$1" 2>/dev/null | cut -f1; }
 
 # Free space on the data volume in KB, as an integer.
 # The before/after probe for gain(); df reflects what was really released.
@@ -76,6 +93,10 @@ START_KB=$(free_kb)
 # Args: <free_kb before the step>. Prints GB / MB / negligible and the new
 # free total. Keychain steps legitimately report ~0: they hold no disk space.
 gain() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "gain <free-kb-before>" "example : b=$(free_kb); rm -rf x; gain "$b""
+        return 2
+    fi
     local d=$(( $(free_kb) - $1 ))
     [ "$d" -lt 0 ] && d=0
     if [ "$d" -ge 1048576 ]; then
