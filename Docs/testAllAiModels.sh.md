@@ -2,40 +2,38 @@
 
 ## What it does
 
-Runs the full aiModelTest suite against **every** downloaded Ollama model and
-ends with a side-by-side comparison table. One question up front — the test
-prompt (empty input defaults to *"What would be next best feature to code"*) —
-then it works through the models unattended.
+Runs the aiModelTest suite over **every engine and every model that engine has
+downloaded**, using one prompt for all of them, and ends with a single
+comparison table.
 
 ## How it works
 
-1. Sources [aiModelTest.sh](aiModelTest.sh.md) and reuses its functions —
-   nothing is duplicated: `aiModelTestServer` (once), then per model
-   `aiModelTestReset` → `aiModelTestRun` (generation benchmark, Anthropic
-   endpoint, tool-call test with retry, context check).
-2. After each model it calls `ollama stop` so the next model loads into clean
-   memory and total times stay comparable.
-3. Metrics come from the suite's exported variables (`G_TOKENS`, `G_TIME`,
-   `G_TPS`, `R_toolcall`) — Ollama's own token counters, not estimates.
+1. Asks for the prompt once (empty = *"What would be next best feature to
+   code"*) and exports it, so the per-model tests do not ask again.
+2. Enumerates engines that have models, and sweeps
+   `for each engine → for each of its models`.
+3. Per model: `aiModelTestEnsureServing` (starts the Ollama daemon, or
+   `llama-server` / `mlx_lm.server` bound to that model) → `aiModelTestServer`
+   → `aiModelTestRun`.
+4. **Frees the hardware before *and* after every model** — `freeAllEngines`
+   unloads all Ollama models, kills our llama-server and any mlx server, then
+   **waits (up to 40 s, escalating to SIGKILL) until the processes are really
+   gone**, and reports the memory recovered. This is not tidiness: two 30 GB
+   models resident at once takes the whole machine down, which is exactly what
+   happened before this was hardened. An interrupt (Ctrl-C) runs the same
+   cleanup.
+   - Teardown never trusts a recorded PID — a reused or stale server has none,
+     so it kills by pattern. Our llama-server is matched **by its port**,
+     because Ollama runs an internal subprocess of the same name.
+   - A **fit pre-flight** (`weights + 4 GB ≤ GPU budget`) skips any single
+     model too large for the machine instead of trying and crashing it.
+5. Prints the table: **engine · model · tokens · time · tok/s · tools · ctx ·
+   total**, with long model ids trimmed from the left so the quant stays
+   visible.
 
-Final table columns: **model | tokens | time | tok/s | tool call | total time**
-— generation-only numbers for the middle columns; total time is the whole
-per-model suite including model load. Tool call is PASS / FLAKY (succeeded
-only on retry) / FAIL (refused in 2 attempts).
-
-## Measured result on this machine (M4 Pro 48 GB)
-
-| model | tokens | time | tok/s | tool call | total |
-|---|---|---|---|---|---|
-| devstral:24b | 149 | 9.0 s | 16.5 | **PASS** | 29 s |
-| qwen3.6:35b-a3b | 750 | 14.8 s | 50.7 | **FLAKY** | 39 s |
-| qwen2.5-coder:7b | 392 | 8.0 s | 49.2 | **FAIL** | 14 s |
-
-The three verdicts confirm the compatibility report's characterizations:
-devstral is the reliable tool-caller (its specialty), qwen3.6 is 3× faster but
-inconsistent about tool use (the observed "mixed answers" in Claude Code),
-and qwen2.5-coder:7b writes JSON *prose* instead of real tool calls — it
-predates agentic training and belongs in autocomplete duty only.
+Because every engine is measured through the same endpoint with the same
+warmup and wall-clock timing, a row from llama.cpp is comparable with a row
+from Ollama — which is the whole point of the sweep.
 
 ## Why it is necessary
 

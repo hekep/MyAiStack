@@ -1,140 +1,281 @@
 #!/bin/bash
 #
-# aiModelTest.sh — layered verification that the local Ollama stack works,
-#                  with timing and tokens-per-second reporting.
+# aiModelTest.sh — layered verification of ONE engine + model, with timing and
+#                  tokens-per-second.
 #
-# Tests each layer independently, so a failure points at the exact broken part:
+# Asks which engine, then which of that engine's downloaded models, then tests
+# each layer independently so a failure names the broken part:
 #
-#   1. aiModelTestServer      — is the Ollama server reachable?
-#   2. aiModelTestGenerate    — raw generation: send $PROMPT, time it, count
-#                               tokens, report tokens/second
-#   3. aiModelTestAnthropic   — the Anthropic-compatible endpoint Claude CLI
-#                               uses (/v1/messages): does it answer properly?
-#   4. aiModelTestToolCall    — agentic fitness: given a weather tool, does the
-#                               model emit a well-formed tool call? (This is
-#                               what Claude Code needs constantly.)
-#   5. aiModelTestContext     — is the loaded context window big enough for
-#                               Claude Code (>= 32k), or the 4k default?
-#   6. aiModelTest            — wrapper: runs all, prints verdict table
+#   aiModelTestEngineSelector  — numeric menu of engines that have models
+#   aiModelTestModelSelector   — models downloaded for that engine
+#   aiModelTestPromptSelector  — what to send (skipped if PROMPT is set)
+#   aiModelTestEnsureServing   — start/point the engine at that model
+#   aiModelTestServer          — is the endpoint reachable?
+#   aiModelTestGenerate        — OpenAI /v1/chat/completions: tokens, time, tok/s
+#   aiModelTestAnthropic       — /v1/messages (Ollama only; SKIP elsewhere)
+#   aiModelTestToolCall        — agentic fitness: does it emit a tool call?
+#   aiModelTestContext         — is the served context >= 32k?
+#   aiModelTestRun             — tests 2-5 against the current engine+model
+#   aiModelTest                — wrapper
+#
+# Measurement is deliberately identical for every engine (same OpenAI endpoint,
+# same warmup, same wall-clock timing), so numbers are comparable across them.
 #
 # Usage:
-#   ./aiModelTest.sh                     # tests first downloaded model
-#   ./aiModelTest.sh qwen3.6:35b-a3b     # tests a specific model
+#   ./aiModelTest.sh                          # menus
+#   ./aiModelTest.sh Ollama qwen3.6:35b-a3b   # explicit engine + model
+#   PROMPT="..." ./aiModelTest.sh
 #
 set -u
 
-# ---- freely modifiable test prompt (used by the generation benchmark) -------
-PROMPT="${PROMPT:-Hello, check the weather for today. I am in Turku, Finland}"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# engine plumbing (ports, listers, detection, sizes) is shared with the launcher
+source "${DIR}/launchInference.sh"
 
-# The tool-call test uses its own FIXED prompt matched to the get_weather tool,
-# independent of $PROMPT — otherwise an unrelated user prompt makes correct
-# prose answers look like tool-call failures.
+DEFAULT_PROMPT="Hello, check the weather for today. I am in Turku, Finland"
+PROMPT="${PROMPT:-}"          # empty unless the caller/env set one
+# fixed prompt for the tool test, so an unrelated PROMPT cannot fake a failure
 TOOL_PROMPT="Hello, check the weather for today. I am in Turku, Finland"
 
-# ---------- helpers ----------------------------------------------------------
-BOLD=$(tput bold 2>/dev/null || true); RESET=$(tput sgr0 2>/dev/null || true)
-GREEN=$(tput setaf 2 2>/dev/null || true); YELLOW=$(tput setaf 3 2>/dev/null || true)
-RED=$(tput setaf 1 2>/dev/null || true); BLUE=$(tput setaf 4 2>/dev/null || true)
-info()  { echo "${BLUE}==>${RESET} $*"; }
-ok()    { echo "${GREEN} ✓ ${RESET} $*"; }
-warn()  { echo "${YELLOW} ! ${RESET} $*"; }
-fail()  { echo "${RED} ✗ ${RESET} $*"; }
-
-HOSTADDR=$(echo "${OLLAMA_HOST:-127.0.0.1:11434}" | sed 's|^http://||;s|/$||')
-case "$HOSTADDR" in *:*) : ;; *) HOSTADDR="${HOSTADDR}:11434" ;; esac
-API="http://${HOSTADDR}"
-
-MODEL="${1:-}"
-# results (bash 3.2 on macOS has no associative arrays)
 R_server=SKIP; R_generate=SKIP; R_anthropic=SKIP; R_toolcall=SKIP; R_context=SKIP
-# metrics captured by aiModelTestGenerate (readable by wrapper scripts)
 G_TOKENS=0; G_TIME=0; G_TPS=0
+TEST_ENDPOINT=""; TEST_SERVER_PID=""
 
-# reset all per-model state — call between models when testing several
 aiModelTestReset() {
     R_server=SKIP; R_generate=SKIP; R_anthropic=SKIP; R_toolcall=SKIP; R_context=SKIP
     G_TOKENS=0; G_TIME=0; G_TPS=0
 }
 
-# the launcher provides the shared numbered model-selector menu
-AI_LAUNCHER="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/launchInference.sh"
+# engines that actually have something to test
+enginesWithModels() {
+    local e
+    for e in Llama.cpp MLX-LM Ollama; do
+        case "$e" in
+            Llama.cpp) llamacpp_installed || continue ;;
+            MLX-LM)    mlxml_installed    || continue ;;
+            Ollama)    ollama_installed   || continue ;;
+        esac
+        [ "$(engineListInstalled "$e" | grep -c . || true)" -gt 0 ] && echo "$e"
+    done
+}
+
+# ---------- engine selector ---------------------------------------------------
+aiModelTestEngineSelector() {
+    local engines=() e
+    while IFS= read -r e; do [ -n "$e" ] && engines+=("$e"); done < <(enginesWithModels)
+    if [ "${#engines[@]}" -eq 0 ]; then
+        fail "No engine has downloaded models — run ./install.sh first."
+        return 1
+    fi
+    if [ "${#engines[@]}" -eq 1 ]; then
+        ok "Only one engine has models: ${engines[0]}"
+        echo "${engines[0]}"; return 0
+    fi
+    echo >&2
+    echo "${BOLD}Engines with downloaded models:${RESET}" >&2
+    local i=1 n
+    for e in "${engines[@]}"; do
+        n=$(engineListInstalled "$e" | grep -c . || true)
+        printf "  %d) %-12s %s model(s)\n" "$i" "$e" "$n" >&2
+        i=$((i+1))
+    done
+    local sel
+    while true; do
+        sel=$(ask_val "Select engine [1-${#engines[@]}]" "1")
+        case "$sel" in *[!0-9]*|"") echo "Enter a number." >&2; continue ;; esac
+        [ "$sel" -ge 1 ] && [ "$sel" -le "${#engines[@]}" ] && break
+        echo "Out of range." >&2
+    done
+    echo "${engines[$((sel-1))]}"
+}
+
+# ---------- prompt selector ---------------------------------------------------
+# Asked only when PROMPT was not already supplied (env var, or a wrapper such
+# as testAllAiModels.sh which asks once for the whole sweep).
+aiModelTestPromptSelector() {
+    if [ -n "$PROMPT" ]; then
+        ok "Prompt: \"${PROMPT}\""
+        return 0
+    fi
+    PROMPT=$(ask_val "Prompt to send to the model" "$DEFAULT_PROMPT")
+    [ -z "$PROMPT" ] && PROMPT="$DEFAULT_PROMPT"
+    ok "Prompt: \"${PROMPT}\""
+}
+
+# ---------- model selector (shared with the launcher) ------------------------
+aiModelTestModelSelector() { launchInferenceModelSelector "$1"; }
+
+# ---------- make the engine serve this model ---------------------------------
+# Sets TEST_ENDPOINT, and TEST_SERVER_PID when this script started the server.
+aiModelTestEnsureServing() {
+    local engine="${1:?}" model="${2:?}" host="127.0.0.1" port t=0
+    port=$(engine_port "$engine")
+    TEST_ENDPOINT="http://${host}:${port}"
+    TEST_SERVER_PID=""
+
+    case "$engine" in
+        Ollama)
+            engine_up Ollama "$host" && return 0
+            info "Starting the Ollama daemon..."
+            OLLAMA_CONTEXT_LENGTH="${OLLAMA_CONTEXT_LENGTH:-32768}" nohup ollama serve >/dev/null 2>&1 &
+            TEST_SERVER_PID=$!
+            sleep 3
+            engine_up Ollama "$host" || { fail "Ollama did not start."; return 1; }
+            ;;
+        Llama.cpp)
+            # the model is bound at server start, so a different model means restart
+            local f cur
+            f="${LLAMACPP_MODEL_DIR}/$(printf '%s' "$model" | sed 's|/|__|g; s|:|@|').gguf"
+            [ -e "$f" ] || { fail "GGUF not found: ${f}"; return 1; }
+            if engine_up Llama.cpp "$host"; then
+                cur=$(curl -sf --max-time 5 "${TEST_ENDPOINT}/v1/models" 2>/dev/null \
+                      | python3 -c 'import json,sys;d=json.load(sys.stdin);xs=d.get("data") or d.get("models") or [];print((xs[0].get("id") or xs[0].get("name") or "") if xs else "")' 2>/dev/null)
+                case "$cur" in *"$(basename "$f")"*) return 0 ;; esac
+                warn "llama-server is serving something else — restarting it."
+                # match the Homebrew binary path: Ollama runs its own runner
+                # ALSO called llama-server, and killing that breaks Ollama.
+                llamacppKillOurs; sleep 2
+            fi
+            info "Starting llama-server with $(basename "$f")..."
+            nohup llama-server -m "$f" -c "${LLAMACPP_CTX:-32768}" --host "$host" --port "$port" \
+                  >"${TMPDIR:-/tmp}/llama-server-test.log" 2>&1 &
+            TEST_SERVER_PID=$!
+            info "Waiting for llama-server to load the model (it answers 503 until ready)..."
+            while [ "$t" -lt 600 ] && ! engine_up Llama.cpp "$host"; do sleep 3; t=$((t+3)); done
+            engine_up Llama.cpp "$host" || { fail "llama-server did not start — see ${TMPDIR:-/tmp}/llama-server-test.log"; return 1; }
+            ;;
+        MLX-LM)
+            local cur2
+            if engine_up MLX-LM "$host"; then
+                cur2=$(curl -sf --max-time 5 "${TEST_ENDPOINT}/v1/models" 2>/dev/null \
+                       | python3 -c 'import json,sys;d=json.load(sys.stdin);xs=d.get("data") or d.get("models") or [];print((xs[0].get("id") or xs[0].get("name") or "") if xs else "")' 2>/dev/null)
+                [ "$cur2" = "$model" ] && return 0
+                warn "mlx_lm.server is serving ${cur2:-something else} — restarting it."
+                pkill -f "mlx_lm.server" 2>/dev/null; sleep 2
+            fi
+            info "Starting mlx_lm.server with ${model}..."
+            nohup mlx_lm.server --model "$model" --host "$host" --port "$port" \
+                  >"${TMPDIR:-/tmp}/mlx-server-test.log" 2>&1 &
+            TEST_SERVER_PID=$!
+            info "Waiting for mlx_lm.server to load the model..."
+            while [ "$t" -lt 600 ] && ! engine_up MLX-LM "$host"; do sleep 3; t=$((t+3)); done
+            engine_up MLX-LM "$host" || { fail "mlx_lm.server did not start — see ${TMPDIR:-/tmp}/mlx-server-test.log"; return 1; }
+            ;;
+    esac
+}
+
+aiModelTestStopServer() {   # only stops what this script started
+    [ -n "${TEST_SERVER_PID:-}" ] || return 0
+    kill "$TEST_SERVER_PID" 2>/dev/null
+    TEST_SERVER_PID=""
+}
+
+# the id the endpoint advertises (llama-server names models its own way)
+aiModelTestServedId() {
+    curl -sf --max-time 8 "${TEST_ENDPOINT}/v1/models" 2>/dev/null | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    xs=d.get("data") or d.get("models") or []
+    print((xs[0].get("id") or xs[0].get("name") or "") if xs else "")
+except Exception: print("")' 2>/dev/null
+}
 
 # ---------- 1. server reachable ----------------------------------------------
 aiModelTestServer() {
-    info "Test 1 — server reachable at ${API}"
-    local v
-    v=$(curl -sf --max-time 5 "${API}/api/version" 2>/dev/null)
-    if [ -n "$v" ]; then
-        ok "Ollama server up: $v"
+    local engine="${1:?}"
+    info "Test 1 — ${engine} reachable at ${TEST_ENDPOINT}"
+    if engine_up "$engine" "$(echo "$TEST_ENDPOINT" | sed 's|http://||; s|:.*||')"; then
+        ok "${engine} is serving."
         R_server=PASS
     else
-        fail "No Ollama server at ${API}. Start it with ./launchInference.sh"
+        fail "No ${engine} server at ${TEST_ENDPOINT}."
         R_server=FAIL
         return 1
     fi
 }
 
-# ---------- 2. raw generation: timer + token count + tok/s -------------------
+# ---------- 2. generation: tokens, time, tok/s -------------------------------
+# Same OpenAI endpoint on every engine, with a warmup first so model-load time
+# is not counted as generation time.
 aiModelTestGenerate() {
-    info "Test 2 — raw generation with PROMPT: \"${PROMPT}\""
-    local t0 t1 resp payload
-    payload=$(python3 <<PYEOF
-import json
-print(json.dumps({"model": "${MODEL}", "prompt": """${PROMPT}""", "stream": False}))
+    local engine="${1:?}" model="${2:?}" served payload resp t0 t1
+    served=$(aiModelTestServedId); [ -z "$served" ] && served="$model"
+    info "Test 2 — generation with PROMPT: \"${PROMPT}\""
+
+    local warm
+    warm=$(python3 - "$served" <<'PYEOF'
+import json, sys
+print(json.dumps({"model": sys.argv[1], "max_tokens": 1,
+                  "messages": [{"role": "user", "content": "hi"}]}))
 PYEOF
 )
-    t0=$(date +%s)
-    resp=$(curl -sf --max-time 300 "${API}/api/generate" -d "$payload" 2>/dev/null)
-    t1=$(date +%s)
+    curl -sf --max-time 300 "${TEST_ENDPOINT}/v1/chat/completions" \
+         -H "content-type: application/json" -H "authorization: Bearer local" \
+         -d "$warm" >/dev/null 2>&1 || true      # warmup: loads the model
+
+    payload=$(python3 - "$served" <<PYEOF
+import json, sys
+print(json.dumps({"model": sys.argv[1], "max_tokens": 512,
+                  "messages": [{"role": "user", "content": """${PROMPT}"""}]}))
+PYEOF
+)
+    t0=$(python3 -c 'import time;print(time.time())')
+    resp=$(curl -sf --max-time 600 "${TEST_ENDPOINT}/v1/chat/completions" \
+           -H "content-type: application/json" -H "authorization: Bearer local" \
+           -d "$payload" 2>/dev/null)
+    t1=$(python3 -c 'import time;print(time.time())')
     if [ -z "$resp" ]; then
-        fail "Generation failed (timeout or model not loadable)."
+        fail "Generation failed (timeout or model would not load)."
         R_generate=FAIL
         return 1
     fi
-    # Ollama returns exact counters: eval_count (output tokens), eval_duration,
-    # prompt_eval_count (input tokens), prompt_eval_duration — nanoseconds.
-    # Human-readable lines go to stderr; a machine line (tokens time tok/s)
-    # comes back on stdout and lands in G_TOKENS / G_TIME / G_TPS.
     local metrics
-    metrics=$(python3 - "$resp" <<'PYEOF'
+    metrics=$(python3 - "$resp" "$t0" "$t1" <<'PYEOF'
 import json, sys
-r = json.loads(sys.argv[1])
-out_tok  = r.get("eval_count", 0)
-out_ns   = r.get("eval_duration", 1)
-in_tok   = r.get("prompt_eval_count", 0)
-in_ns    = r.get("prompt_eval_duration", 1)
-answer   = r.get("response", "").strip()
+r = json.loads(sys.argv[1]); elapsed = float(sys.argv[3]) - float(sys.argv[2])
+u = r.get("usage", {}) or {}
+out = u.get("completion_tokens", 0) or 0
+inp = u.get("prompt_tokens", 0) or 0
+txt = ""
+for c in r.get("choices", []):
+    txt += (c.get("message", {}) or {}).get("content", "") or ""
 e = sys.stderr
-print(f"    Answer (first 200 chars): {answer[:200]!r}", file=e)
-print(f"    Input : {in_tok} tokens, processed at {in_tok/(in_ns/1e9):,.0f} tok/s", file=e)
-print(f"    Output: {out_tok} tokens in {out_ns/1e9:.1f} s", file=e)
-print(f"    >>> GENERATION SPEED: {out_tok/(out_ns/1e9):.1f} tokens/second <<<", file=e)
-print(f"{out_tok} {out_ns/1e9:.1f} {out_tok/(out_ns/1e9):.1f}")
+print(f"    Answer (first 200 chars): {txt.strip()[:200]!r}", file=e)
+print(f"    Input : {inp} tokens", file=e)
+print(f"    Output: {out} tokens in {elapsed:.1f} s (wall clock, after warmup)", file=e)
+tps = out / elapsed if elapsed > 0 else 0
+print(f"    >>> GENERATION SPEED: {tps:.1f} tokens/second <<<", file=e)
+print(f"{out} {elapsed:.1f} {tps:.1f}")
 PYEOF
 )
     read -r G_TOKENS G_TIME G_TPS <<< "$metrics"
-    ok "Wall time: $((t1 - t0)) s total (includes model load if cold)."
     R_generate=PASS
 }
 
-# ---------- 3. Anthropic-compatible endpoint (what Claude CLI uses) ----------
+# ---------- 3. Anthropic endpoint (Ollama only) ------------------------------
 aiModelTestAnthropic() {
-    info "Test 3 — Anthropic Messages endpoint (/v1/messages, used by Claude CLI)"
-    local resp payload
-    # NOTE: generous max_tokens — thinking models (qwen3.x, deepseek-r1) spend
-    # budget on reasoning first; a small cap yields an empty text reply.
-    payload=$(python3 <<PYEOF
-import json
-print(json.dumps({"model": "${MODEL}", "max_tokens": 2000,
-  "messages": [{"role": "user", "content": "Reply with exactly: PONG"}]}))
+    local engine="${1:?}" model="${2:?}" resp
+    if [ "$engine" != "Ollama" ]; then
+        info "Test 3 — Anthropic endpoint: not applicable to ${engine} (OpenAI-compatible only)"
+        warn "Claude Code cannot use ${engine}; Pi and OpenCode can."
+        R_anthropic=SKIP
+        return 0
+    fi
+    info "Test 3 — Anthropic Messages endpoint (/v1/messages, used by Claude Code)"
+    local apayload
+    apayload=$(python3 - "$model" <<'PYEOF'
+import json, sys
+print(json.dumps({"model": sys.argv[1], "max_tokens": 2000,
+                  "messages": [{"role": "user", "content": "Reply with exactly: PONG"}]}))
 PYEOF
 )
-    resp=$(curl -sf --max-time 120 "${API}/v1/messages" \
+    resp=$(curl -sf --max-time 300 "${TEST_ENDPOINT}/v1/messages" \
         -H "content-type: application/json" \
         -H "x-api-key: ollama" -H "anthropic-version: 2023-06-01" \
-        -d "$payload" 2>/dev/null)
+        -d "$apayload" 2>/dev/null)
     if [ -z "$resp" ]; then
-        fail "/v1/messages did not answer — this Ollama version may predate Anthropic support. Upgrade Ollama."
+        fail "/v1/messages did not answer — upgrade Ollama."
         R_anthropic=FAIL
         return 1
     fi
@@ -142,173 +283,172 @@ PYEOF
 import json, sys
 r = json.loads(sys.argv[1])
 blocks = r.get("content", [])
-txt = "".join(b.get("text","") for b in blocks if b.get("type")=="text")
-think = "".join(b.get("thinking","") for b in blocks if b.get("type")=="thinking")
+txt = "".join(b.get("text","") for b in blocks if b.get("type") == "text")
+think = "".join(b.get("thinking","") for b in blocks if b.get("type") == "thinking")
 if think:
-    print(f"    (thinking model: {len(think)} chars of reasoning before the reply)")
+    print(f"    (thinking model: {len(think)} chars of reasoning first)")
 print(f"    Reply: {txt.strip()[:120]!r}")
-assert r.get("type") == "message" and txt.strip(), "no text content in Anthropic response"
+assert r.get("type") == "message" and txt.strip(), "no text content"
 PYEOF
-    [ "${R_anthropic}" = "PASS" ] && ok "Anthropic-format endpoint works." || fail "Anthropic endpoint malformed."
+    [ "$R_anthropic" = "PASS" ] && ok "Anthropic-format endpoint works." || fail "Anthropic endpoint malformed."
 }
 
-# ---------- 4. tool calling (the agentic must-have) --------------------------
+# ---------- 4. tool calling (OpenAI format — every engine) -------------------
 aiModelTestToolCall() {
-    info "Test 4 — tool calling: get_weather tool + fixed weather prompt"
-    local resp payload attempt
-    payload=$(python3 <<PYEOF
-import json
+    local engine="${1:?}" model="${2:?}" served payload resp attempt
+    served=$(aiModelTestServedId); [ -z "$served" ] && served="$model"
+    info "Test 4 — tool calling: get_weather + fixed weather prompt"
+    payload=$(python3 - "$served" <<PYEOF
+import json, sys
 print(json.dumps({
-  "model": "${MODEL}", "max_tokens": 300,
-  "tools": [{"name": "get_weather", "description": "Get current weather for a city",
-             "input_schema": {"type": "object",
-                              "properties": {"city": {"type": "string"}},
-                              "required": ["city"]}}],
+  "model": sys.argv[1], "max_tokens": 400,
+  "tools": [{"type": "function", "function": {
+      "name": "get_weather", "description": "Get current weather for a city",
+      "parameters": {"type": "object",
+                     "properties": {"city": {"type": "string"}},
+                     "required": ["city"]}}}],
   "messages": [{"role": "user", "content": """${TOOL_PROMPT}"""}]}))
 PYEOF
 )
-    # two attempts: tool use is sampled behavior — one miss means "flaky",
-    # two misses means the model genuinely won't call tools
     R_toolcall=FAIL
     for attempt in 1 2; do
         [ "$attempt" = "2" ] && warn "No tool call on attempt 1 — retrying once (flaky vs. never)."
-        resp=$(curl -sf --max-time 120 "${API}/v1/messages" \
-            -H "content-type: application/json" \
-            -H "x-api-key: ollama" -H "anthropic-version: 2023-06-01" \
-            -d "$payload" 2>/dev/null)
-        if [ -z "$resp" ]; then
-            fail "Tool-call request failed."
-            return 1
-        fi
+        resp=$(curl -sf --max-time 300 "${TEST_ENDPOINT}/v1/chat/completions" \
+               -H "content-type: application/json" -H "authorization: Bearer local" \
+               -d "$payload" 2>/dev/null)
+        [ -z "$resp" ] && { fail "Tool-call request failed."; return 1; }
         if aiModelTestToolCallParse "$resp"; then
             [ "$attempt" = "2" ] && R_toolcall=FLAKY || R_toolcall=PASS
             break
         fi
     done
-
-    case "${R_toolcall}" in
-        PASS)  ok   "Well-formed tool call — model is agent-capable at this basic level." ;;
-        FLAKY) warn "Tool call succeeded only on retry — expect inconsistent agent behavior." ;;
-        *)     fail "Model did not use the tool in 2 attempts. It will struggle badly inside Claude Code." ;;
+    case "$R_toolcall" in
+        PASS)  ok   "Well-formed tool call — agent-capable at this basic level." ;;
+        FLAKY) warn "Tool call succeeded only on retry — expect inconsistent agent behaviour." ;;
+        *)     fail "No tool call in 2 attempts. It will struggle inside a coding agent." ;;
     esac
 }
 
-# parse one /v1/messages response: 0 = valid get_weather tool call, 1 = not
 aiModelTestToolCallParse() {
     python3 - "$1" <<'PYEOF'
 import json, sys
 r = json.loads(sys.argv[1])
-tools = [b for b in r.get("content", []) if b.get("type") == "tool_use"]
-if tools:
-    t = tools[0]
-    print(f"    Model called tool: {t['name']}({json.dumps(t.get('input',{}))})")
-    assert t["name"] == "get_weather", "wrong tool"
-    assert "city" in t.get("input", {}), "missing required arg"
-    print(f"    stop_reason: {r.get('stop_reason')}")
+for c in r.get("choices", []):
+    m = c.get("message", {}) or {}
+    calls = m.get("tool_calls") or []
+    if calls:
+        f = calls[0].get("function", {}) or {}
+        print(f"    Model called tool: {f.get('name')}({f.get('arguments')})")
+        assert f.get("name") == "get_weather", "wrong tool"
+        args = f.get("arguments") or "{}"
+        if isinstance(args, str):
+            args = json.loads(args)
+        assert "city" in args, "missing required arg"
+        print(f"    finish_reason: {c.get('finish_reason')}")
+        break
 else:
-    txt = "".join(b.get("text","") for b in r.get("content",[]) if b.get("type")=="text")
-    print(f"    NO tool call — model answered in prose instead: {txt.strip()[:120]!r}")
+    txt = "".join((c.get("message", {}) or {}).get("content", "") or ""
+                  for c in r.get("choices", []))
+    print(f"    NO tool call — answered in prose instead: {txt.strip()[:120]!r}")
     raise SystemExit(1)
 PYEOF
 }
 
-# ---------- 5. context window size -------------------------------------------
+# ---------- 5. served context window -----------------------------------------
 aiModelTestContext() {
-    info "Test 5 — loaded context window (Claude Code needs >= 32k)"
-    local ctx tries=0
-    while : ; do
-        ctx=$(curl -sf "${API}/api/ps" 2>/dev/null | python3 -c "
+    local engine="${1:?}" model="${2:?}" ctx=0 host
+    host=$(echo "$TEST_ENDPOINT" | sed 's|http://||; s|:.*||')
+    info "Test 5 — served context window (agents want >= 32k)"
+    case "$engine" in
+        Ollama)
+            ctx=$(curl -sf --max-time 8 "http://${host}:$(engine_port Ollama)/api/ps" 2>/dev/null | python3 -c '
 import json,sys
-d = json.load(sys.stdin)
-ms = d.get('models', [])
-print(ms[0].get('context_length', 0) if ms else 0)" 2>/dev/null)
-        [ -n "$ctx" ] && [ "$ctx" != "0" ] && break
-        tries=$((tries+1))
-        [ "$tries" -gt 1 ] && break
-        # model got unloaded between tests — load it and retry once
-        info "No model loaded right now — loading ${MODEL} to measure its context..."
-        curl -sf --max-time 300 "${API}/api/generate" \
-             -d "{\"model\": \"${MODEL}\", \"keep_alive\": \"5m\"}" >/dev/null 2>&1
-    done
-    if [ -z "$ctx" ] || [ "$ctx" = "0" ]; then
-        warn "Could not read context length even after loading ${MODEL}."
+try:
+    m=json.load(sys.stdin).get("models",[])
+    print(m[0].get("context_length",0) if m else 0)
+except Exception: print(0)' 2>/dev/null)
+            ;;
+        Llama.cpp)
+            ctx=$(curl -sf --max-time 8 "${TEST_ENDPOINT}/props" 2>/dev/null | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    print(d.get("default_generation_settings",{}).get("n_ctx", d.get("n_ctx",0)) or 0)
+except Exception: print(0)' 2>/dev/null)
+            ;;
+        MLX-LM)
+            warn "mlx_lm.server exposes no context endpoint — cannot verify."
+            R_context=WARN
+            return 0
+            ;;
+    esac
+    [ -z "$ctx" ] && ctx=0
+    if [ "$ctx" -eq 0 ]; then
+        warn "Could not read the served context length."
         R_context=WARN
-        return 0
-    fi
-    if [ "$ctx" -ge 32768 ]; then
-        ok "Context window: ${ctx} tokens — enough for Claude Code."
+    elif [ "$ctx" -ge 32768 ]; then
+        ok "Context window: ${ctx} tokens — enough for agentic use."
         R_context=PASS
     else
-        fail "Context window is only ${ctx} tokens. Claude Code's system prompt alone overflows it —"
-        fail "this causes exactly the confused/mixed answers seen. Fix: restart the server with"
-        fail "  ./launchInference.sh sets the context when it starts the engine"
+        fail "Context window is only ${ctx} tokens — a coding agent's system prompt alone overflows it."
+        fail "Fix: relaunch via ./launchInference.sh and pick 32K or more."
         R_context=FAIL
     fi
 }
 
-# ---------- suite: tests 2-5 against the current $MODEL ----------------------
-# Reusable per-model runner: set MODEL (and optionally call aiModelTestReset)
-# then call this. Used by aiModelTest and by testAllAiModels.sh.
+# ---------- suite -------------------------------------------------------------
 aiModelTestRun() {
-    aiModelTestGenerate
-    aiModelTestAnthropic
-    aiModelTestToolCall
-    aiModelTestContext
+    local engine="${1:?}" model="${2:?}"
+    aiModelTestGenerate  "$engine" "$model"
+    aiModelTestAnthropic "$engine" "$model"
+    aiModelTestToolCall  "$engine" "$model"
+    aiModelTestContext   "$engine" "$model"
 }
 
-# ---------- 6. wrapper -------------------------------------------------------
+# ---------- wrapper -----------------------------------------------------------
 aiModelTest() {
-    command -v ollama >/dev/null 2>&1 || { fail "ollama not installed."; return 1; }
-    command -v python3 >/dev/null 2>&1 || { fail "python3 required for JSON parsing."; return 1; }
+    command -v python3 >/dev/null 2>&1 || { fail "python3 is required."; return 1; }
+    local engine="${1:-}" model="${2:-}" T0 T1
+    [ -z "$engine" ] && { engine=$(aiModelTestEngineSelector) || return 1; }
+    [ -z "$model" ]  && { model=$(aiModelTestModelSelector "$engine") || return 1; }
+    aiModelTestPromptSelector
+    info "Testing ${BOLD}${model}${RESET} on ${BOLD}${engine}${RESET}"
 
-    aiModelTestServer || return 1
+    aiModelTestEnsureServing "$engine" "$model" || return 1
+    aiModelTestServer "$engine" || return 1
 
-    if [ -z "$MODEL" ]; then
-        # no argument: offer the same numbered menu of installed models that
-        # launchInference.sh provides it (launchInferenceModelSelector)
-        if [ -f "$AI_LAUNCHER" ]; then
-            source "$AI_LAUNCHER"
-            MODEL=$(launchInferenceModelSelector Ollama) || { fail "No model selected."; return 1; }
-        else
-            MODEL=$(ollama list 2>/dev/null | awk 'NR==2 {print $1}')
-            [ -z "$MODEL" ] && { fail "No models downloaded."; return 1; }
-            warn "launchInference.sh not found — testing first downloaded: ${MODEL}"
-        fi
-    fi
-    info "Model under test: ${BOLD}${MODEL}${RESET}"
-
-    local T0 T1
     T0=$(date +%s)
-    aiModelTestRun
+    aiModelTestRun "$engine" "$model"
     T1=$(date +%s)
 
-    echo
-    echo "${BOLD}================= Verdict =================${RESET}"
+    echo >&2
+    echo "${BOLD}================= Verdict =================${RESET}" >&2
     local k v
     for k in server generate anthropic toolcall context; do
         eval "v=\${R_$k}"
         case "$v" in
             PASS)       ok   "$k" ;;
             WARN|FLAKY) warn "$k ($v)" ;;
+            SKIP)       echo "    - $k (not applicable)" >&2 ;;
             *)          fail "$k" ;;
         esac
     done
-    echo "    Total test time: $((T1 - T0)) s"
-    echo
+    echo "    Total test time: $((T1 - T0)) s" >&2
+    echo >&2
+
     local fails=0 warns=0
-    for k in "$R_server" "$R_generate" "$R_anthropic" "$R_toolcall" "$R_context"; do
-        case "$k" in FAIL) fails=$((fails+1)) ;; WARN|FLAKY) warns=$((warns+1)) ;; esac
+    for v in "$R_server" "$R_generate" "$R_anthropic" "$R_toolcall" "$R_context"; do
+        case "$v" in FAIL) fails=$((fails+1)) ;; WARN|FLAKY) warns=$((warns+1)) ;; esac
     done
     if [ "$fails" -gt 0 ]; then
-        warn "${BOLD}Fix the FAIL lines above before judging the model inside Claude Code.${RESET}"
+        warn "${BOLD}Fix the FAIL lines before judging the model itself.${RESET}"
     elif [ "$warns" -gt 0 ]; then
-        ok "${BOLD}No failures — stack works.${RESET}"
-        warn "WARN lines above could not be fully verified; re-run to confirm."
+        ok "${BOLD}No failures — the stack works.${RESET}"
     else
-        ok "${BOLD}Stack is fit for Claude CLI use.${RESET}"
+        ok "${BOLD}${engine} + ${model} is fit for agentic use.${RESET}"
     fi
 }
 
-if [ "${BASH_SOURCE[0]:-}" = "$0" ]; then
-    aiModelTest
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
+    aiModelTest "$@"
 fi

@@ -12,6 +12,8 @@
 #   launchInferenceContextSelector   -> 32K / 64K / 128K (default) / bigger
 #   launchInferenceNetworkSelector   -> localhost or LAN, for ANY engine
 #   launchInferenceFreeResources     -> close memory-hungry desktop apps
+#   launchInferenceKillPrevious      -> stop engines/models already serving, so
+#                                       the new model gets the whole machine
 #   launchInferencePrerequisites     -> weights + KV cache must fit the GPU
 #   launchInferenceStart             -> start the engine's server, report usage
 #   launchInferenceAgentSelector     -> coding agent, filtered by engine
@@ -66,6 +68,11 @@ MLX_HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}/hub"
 OLLAMA_PORT=11434; LLAMACPP_PORT=8080; MLX_PORT=8081
 
 llamacpp_installed() { command -v llama-server >/dev/null 2>&1 || command -v llama-cli >/dev/null 2>&1; }
+
+# Ollama runs its OWN llama-server (random high port). Identify ours by the
+# port we serve on — never by the bare process name.
+llamacppOurPids()  { pgrep -f "llama-server .*--port ${LLAMACPP_PORT}" 2>/dev/null; }
+llamacppKillOurs() { pkill  -f "llama-server .*--port ${LLAMACPP_PORT}" 2>/dev/null; }
 mlxml_installed()    { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^mlx-lm'; }
 ollama_installed()   { command -v ollama >/dev/null 2>&1; }
 
@@ -100,12 +107,30 @@ engine_port() {
         Ollama)    echo "$OLLAMA_PORT" ;;
     esac
 }
-engine_up() {   # $1 engine, $2 host
+engine_up() {   # $1 engine, $2 host — is it up AND ready to infer?
     local p; p=$(engine_port "$1")
     case "$1" in
-        Ollama) curl -sf --max-time 3 "http://${2}:${p}/api/version" >/dev/null 2>&1 ;;
-        *)      curl -sf --max-time 3 "http://${2}:${p}/v1/models"   >/dev/null 2>&1 ;;
+        Ollama)    curl -sf --max-time 3 "http://${2}:${p}/api/version" >/dev/null 2>&1 ;;
+        Llama.cpp) curl -sf --max-time 3 "http://${2}:${p}/health"      >/dev/null 2>&1 ;;
+        *)         curl -sf --max-time 3 "http://${2}:${p}/v1/models"   >/dev/null 2>&1 ;;
     esac
+}
+
+# what is currently serving, with its memory footprint
+runningEngines() {
+    local pid rss
+    if curl -sf --max-time 2 "http://127.0.0.1:${OLLAMA_PORT}/api/version" >/dev/null 2>&1; then
+        rss=$(ps -axo rss,command | awk '/[o]llama/ {s+=$1} END {printf "%.1f", s/1048576}')
+        echo "Ollama|daemon on :${OLLAMA_PORT}|${rss} GB"
+    fi
+    for pid in $(llamacppOurPids); do
+        rss=$(ps -o rss= -p "$pid" | awk '{printf "%.1f", $1/1048576}')
+        echo "Llama.cpp|llama-server pid ${pid}|${rss} GB"
+    done
+    for pid in $(pgrep -f "mlx_lm.server" 2>/dev/null); do
+        rss=$(ps -o rss= -p "$pid" | awk '{printf "%.1f", $1/1048576}')
+        echo "MLX-LM|mlx_lm.server pid ${pid}|${rss} GB"
+    done
 }
 
 # models installed per engine, one tag per line
@@ -372,6 +397,60 @@ launchInferenceAgentSelector() {
     echo "${usable[$((sel-1))]}"
 }
 
+# ---------- 4c. free the hardware from previous runs --------------------------
+# A previously launched engine keeps its whole model resident. Before starting
+# a new one, offer to stop what is already serving so the new model gets the
+# machine to itself.
+# $1 = the engine about to be launched (its own server is restarted anyway).
+launchInferenceKillPrevious() {
+    local target="${1:-}" rows line eng what mem killed=0
+    rows=$(runningEngines)
+    if [ -z "$rows" ]; then
+        ok "No inference engine is running — all memory is free for this launch."
+        return 0
+    fi
+
+    echo >&2
+    echo "${BOLD}Already running:${RESET}" >&2
+    while IFS='|' read -r eng what mem; do
+        [ -z "$eng" ] && continue
+        printf "  %-10s %-28s %s\n" "$eng" "$what" "$mem" >&2
+    done <<< "$rows"
+    warn "Their models stay resident and take memory away from the new one."
+
+    if ! ask_yn "Kill previous inference runs to free the hardware?"; then
+        ok "Leaving them running — the new model gets whatever memory is left."
+        return 0
+    fi
+
+    while IFS='|' read -r eng what mem; do
+        [ -z "$eng" ] && continue
+        case "$eng" in
+            Ollama)
+                # unload every resident model but keep the daemon: it is cheap,
+                # and Ollama is the only engine serving the Anthropic API
+                local m
+                for m in $(ollama ps 2>/dev/null | awk 'NR>1 {print $1}'); do
+                    ollama stop "$m" >/dev/null 2>&1 && { ok "Unloaded Ollama model ${m}."; killed=1; }
+                done
+                if [ "$target" != "Ollama" ] && ask_ny "Also stop the Ollama daemon itself?"; then
+                    brew services stop ollama >/dev/null 2>&1
+                    pkill -f "ollama serve" 2>/dev/null && ok "Ollama daemon stopped."
+                    killed=1
+                fi ;;
+            Llama.cpp)
+                # only OUR llama-server: Ollama runs an internal one by the same
+                # name, and killing that breaks Ollama
+                llamacppKillOurs && { ok "Stopped llama-server."; killed=1; } ;;
+            MLX-LM)
+                pkill -f "mlx_lm.server" 2>/dev/null && { ok "Stopped mlx_lm.server."; killed=1; } ;;
+        esac
+    done <<< "$rows"
+
+    [ "$killed" -eq 1 ] && sleep 2
+    ok "Memory free/reclaimable now: $(vm_stat | awk '/Pages free/ {f=$3} /Pages inactive/ {i=$3} END {gsub(/\./,"",f); gsub(/\./,"",i); printf "%.1f", (f+i)*16384/1073741824}') GB"
+}
+
 # ---------- 5. free resources -------------------------------------------------
 # Every open desktop app, biggest memory user first, "Close? [y/N]" each.
 # Never touches the app hosting this session, Finder, or the engines.
@@ -470,7 +549,7 @@ launchInferenceStart() {
         if ask_yn "Restart it with the settings chosen here?"; then
             case "$engine" in
                 Ollama)    brew services stop ollama >/dev/null 2>&1; pkill -f "ollama serve" 2>/dev/null ;;
-                Llama.cpp) pkill -f "llama-server" 2>/dev/null ;;
+                Llama.cpp) llamacppKillOurs ;;
                 MLX-LM)    pkill -f "mlx_lm.server" 2>/dev/null ;;
             esac
             sleep 2
@@ -501,14 +580,16 @@ launchInferenceStart() {
             nohup llama-server -m "$f" -c "$ctx" --host "$bind" --port "$port" \
                   >"${TMPDIR:-/tmp}/llama-server.log" 2>&1 &
             local t=0
-            while [ "$t" -lt 60 ] && ! engine_up "$engine" "$bind"; do sleep 2; t=$((t+2)); done
-            engine_up "$engine" "$bind" || { fail "llama-server did not come up — see ${TMPDIR:-/tmp}/llama-server.log"; return 1; }
+            info "Waiting for llama-server to finish loading the model (503 until ready)..."
+            while [ "$t" -lt 600 ] && ! engine_up "$engine" "$bind"; do sleep 3; t=$((t+3)); done
+            engine_up "$engine" "$bind" || { fail "llama-server did not become ready — see ${TMPDIR:-/tmp}/llama-server.log"; return 1; }
             ;;
         MLX-LM)
             nohup mlx_lm.server --model "$model" --host "$bind" --port "$port" \
                   >"${TMPDIR:-/tmp}/mlx-server.log" 2>&1 &
             local t2=0
-            while [ "$t2" -lt 90 ] && ! engine_up "$engine" "$bind"; do sleep 3; t2=$((t2+3)); done
+            info "Waiting for mlx_lm.server to load the model..."
+            while [ "$t2" -lt 600 ] && ! engine_up "$engine" "$bind"; do sleep 3; t2=$((t2+3)); done
             engine_up "$engine" "$bind" || { fail "mlx_lm.server did not come up — see ${TMPDIR:-/tmp}/mlx-server.log"; return 1; }
             ;;
     esac
@@ -538,8 +619,9 @@ endpointModelId() {
     curl -sf --max-time 8 "${LAUNCH_ENDPOINT}/v1/models" 2>/dev/null | python3 -c '
 import json,sys
 try:
-    d=json.load(sys.stdin).get("data",[])
-    print(d[0].get("id","") if d else "")
+    d=json.load(sys.stdin)
+    xs=d.get("data") or d.get("models") or []
+    print((xs[0].get("id") or xs[0].get("name") or "") if xs else "")
 except Exception: print("")' 2>/dev/null
 }
 
@@ -656,6 +738,7 @@ launchInference() {
     ctx=$(launchInferenceContextSelector "$engine" "$model") || return 1
     bind=$(launchInferenceNetworkSelector "$engine") || return 1
     launchInferenceFreeResources
+    launchInferenceKillPrevious "$engine"
     launchInferencePrerequisites "$engine" "$model" "$ctx" || return 1
     launchInferenceStart "$engine" "$model" "$ctx" "$bind" || return 1
     agent=$(launchInferenceAgentSelector "$engine")

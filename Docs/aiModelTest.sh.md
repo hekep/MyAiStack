@@ -8,22 +8,27 @@ chain from inside Claude Code. Reports precise timing and **tokens/second**
 using Ollama's own token counters (not estimates). The test prompt lives in a
 freely modifiable `PROMPT` variable.
 
-## How it works — six functions
+## How it works
+
+Three questions first — **engine**, then **model**, then **prompt** — and then
+five independent layer tests. Measurement is deliberately identical on every
+engine (same OpenAI `/v1/chat/completions` endpoint, a warmup request first so
+model-load time is not counted, then wall-clock timing), so numbers from
+different engines are directly comparable.
 
 | Function | Layer tested | Pass means |
 |---|---|---|
-| `aiModelTestServer` | Ollama server reachable (`/api/version`) | daemon is up |
-| `aiModelTestGenerate` | Raw generation: sends `$PROMPT`, times it, reads `eval_count`/`eval_duration` | model loads and generates; prints input tok/s, output tokens, and **generation speed in tok/s** |
-| `aiModelTestAnthropic` | `/v1/messages` — the Anthropic-format endpoint Claude CLI uses | endpoint answers with well-formed message content. Thinking models (qwen3.x, deepseek-r1) get a generous `max_tokens` — they spend budget on reasoning first, and a small cap yields an empty reply (a real bug this test caught). |
-| `aiModelTestToolCall` | Agentic fitness: offers a `get_weather` tool with a **fixed weather prompt** (`TOOL_PROMPT`, independent of `$PROMPT` so an unrelated user prompt can't fake a failure). **Two attempts**: pass on the retry → **FLAKY**, no tool call twice → FAIL. | model emits a well-formed `tool_use` block with the required argument — the operation Claude Code performs constantly |
-| `aiModelTestContext` | Context window of the loaded model (`/api/ps`) | ≥ 32k tokens. Ollama's 4k default silently truncates Claude Code's system prompt — the cause of confused/mixed answers. |
-| `aiModelTest` | Wrapper: runs all, prints a PASS/FLAKY/FAIL verdict table + total time | — |
-
-Reusable building blocks for wrapper scripts (used by
-[testAllAiModels.sh](testAllAiModels.sh.md)): `aiModelTestReset` clears
-per-model state, `aiModelTestRun` runs tests 2–5 against `$MODEL`, and the
-generation metrics are exported as `G_TOKENS` / `G_TIME` / `G_TPS` alongside
-the `R_*` verdicts.
+| `aiModelTestEngineSelector` | — | Numeric menu of engines that actually **have downloaded models**; announced without a question when only one qualifies |
+| `aiModelTestModelSelector` | — | That engine's downloaded models (shares `launchInferenceModelSelector`) |
+| `aiModelTestPromptSelector` | — | Asks what to send, defaulting to the weather prompt. Skipped when `PROMPT` is already set (e.g. by the sweep script) |
+| `aiModelTestEnsureServing` | — | Starts or re-points the engine at the chosen model: Ollama daemon, or `llama-server -m <gguf>`, or `mlx_lm.server --model <repo>`. A server already serving a *different* model is restarted |
+| `aiModelTestServer` | endpoint reachable | the engine answers |
+| `aiModelTestGenerate` | generation | prints answer, input/output tokens, seconds and **tokens/second** |
+| `aiModelTestAnthropic` | `/v1/messages` | Ollama only — **SKIP** (not FAIL) on llama.cpp and MLX-LM, with a note that Claude Code cannot use them but Pi and OpenCode can |
+| `aiModelTestToolCall` | agentic fitness | OpenAI `tools` format on every engine; two attempts, so PASS / **FLAKY** (retry only) / FAIL |
+| `aiModelTestContext` | served context ≥ 32k | Ollama via `/api/ps`, llama.cpp via `/props`; MLX-LM cannot report it (**WARN**) |
+| `aiModelTestRun` | tests 2–5 for one engine+model | reusable by the sweep |
+| `aiModelTest` | wrapper + verdict table | — |
 
 ## Measured baseline on this machine (M4 Pro 48 GB, qwen3.6:35b-a3b)
 
@@ -44,9 +49,9 @@ limitation is the model itself, not the stack.
 ## Usage
 
 ```bash
-./aiModelTest.sh                      # numbered menu of installed models
-./aiModelTest.sh qwen3.6:35b-a3b      # specific model, no menu
-PROMPT="Explain APFS snapshots" ./aiModelTest.sh   # custom prompt
+./aiModelTest.sh                                   # engine, model, prompt menus
+./aiModelTest.sh Ollama qwen3.6:35b-a3b            # explicit engine + model
+PROMPT="Explain APFS snapshots" ./aiModelTest.sh   # prompt preset, not asked
 ```
 
 With no argument, the script sources [launchInference.sh](launchInference.sh.md)
