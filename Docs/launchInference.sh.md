@@ -55,6 +55,21 @@ question at all.
 
 Existing agent configs are backed up (`.bak`) before being written.
 
+Each launcher refuses early rather than half-working:
+
+1. **agent not installed** → names the install function, and lists the agents
+   that *are* ready for that engine, so there is a working alternative:
+   ```
+   ✗ OpenCode is not installed — nothing to launch.
+   ! Install it:  installAiStackOpenCodeCodingAgent
+   ! Ready to use with Llama.cpp right now: Pi
+   ```
+2. **agent incompatible with the engine** → says which API is missing.
+3. **nothing serving the engine** → gives the `launchInferenceStart` line for a
+   model you actually have. `LAUNCH_ENDPOINT` is only set by
+   `launchInferenceStart`, so a launcher called on its own derives the endpoint
+   and verifies it instead of writing an empty URL into the agent's config.
+
 ## The context estimate
 
 KV cache is estimated as `ctxK × model_GB / 200` — calibrated against a 30B-class

@@ -153,6 +153,11 @@ _modelInstallerFor() {
 # it: install an engine, or download models for the engines you already have.
 _hintExamples() {
     local fn="$1" shape="$2" agent="${3:-}" e m out="" any=0 pad="\n         "
+    # an example is useless if the agent itself is missing — lead with that
+    if [ -n "$agent" ] && ! _agentInstalled "$agent"; then
+        printf '%b' "NOT INSTALLED: ${agent} — install it first:${pad}    $(_agentInstallerFor "$agent")${pad}then, once an engine is serving:"
+        printf '%b' "${pad}"
+    fi
     for e in $(enginesWithModels); do
         [ -n "$agent" ] && { agent_supports_engine "$agent" "$e" || continue; }
         m=$(engineListInstalled "$e" | head -1)
@@ -1028,6 +1033,46 @@ launchInferenceStartAgent() {
     esac
 }
 
+# The install function that provides one coding agent.
+# Args: <agent>. Prints the function name so guidance can be pasted.
+_agentInstallerFor() {
+    case "$1" in
+        Pi)       echo "installAiStackPiCodingAgent" ;;
+        OpenCode) echo "installAiStackOpenCodeCodingAgent" ;;
+        Claude)   echo "installAiStackClaudeCodingAgent" ;;
+    esac
+}
+
+# True when the named coding agent is installed. Args: <agent>.
+_agentInstalled() {
+    case "$1" in
+        Pi)       pi_installed ;;
+        OpenCode) opencode_installed ;;
+        Claude)   claude_installed ;;
+        *)        return 1 ;;
+    esac
+}
+
+# Refuse to launch an agent that is not installed, and say how to get it.
+# Args: <agent> [engine]. Also names the agents that ARE ready for that engine,
+# so there is a working alternative rather than just a dead end.
+_requireAgent() {
+    local agent="${1:?}" engine="${2:-}" a others=""
+    _agentInstalled "$agent" && return 0
+    fail "${agent} is not installed — nothing to launch."
+    warn "Install it:  $(_agentInstallerFor "$agent")"
+    for a in Pi OpenCode Claude; do
+        [ "$a" = "$agent" ] && continue
+        _agentInstalled "$a" || continue
+        [ -n "$engine" ] && { agent_supports_engine "$a" "$engine" || continue; }
+        others="${others} ${a}"
+    done
+    if [ -n "$others" ]; then
+        warn "Ready to use${engine:+ with ${engine}} right now:${others}"
+    fi
+    return 1
+}
+
 # Resolve the endpoint to hand to a coding agent, and prove something is
 # actually serving it. Args: <engine>. Prints the URL, or fails with the exact
 # command that starts the engine.
@@ -1070,6 +1115,7 @@ launchInferenceAgentClaude() {
         return 2
     fi
     local engine="$1" model="$2" endpoint
+    _requireAgent Claude "$engine" || return 1
     if [ "$engine" != "Ollama" ]; then
         fail "Claude Code needs the Anthropic API — ${engine} does not serve it."
         return 1
@@ -1117,6 +1163,7 @@ launchInferenceAgentPi() {
         return 2
     fi
     local engine="$1" model="$2" endpoint cfg="$HOME/.pi/agent/local-models.json"
+    _requireAgent Pi "$engine" || return 1
     endpoint=$(_resolveEndpointFor "$engine") || return 1
     mkdir -p "$(dirname "$cfg")"
     if [ -f "$cfg" ] && ! grep -q "\"${endpoint}\"" "$cfg" 2>/dev/null; then
@@ -1147,6 +1194,7 @@ launchInferenceAgentOpenCode() {
         return 2
     fi
     local engine="$1" model="$2" endpoint cfg="$HOME/.config/opencode/opencode.json" mid
+    _requireAgent OpenCode "$engine" || return 1
     endpoint=$(_resolveEndpointFor "$engine") || return 1
     LAUNCH_ENDPOINT="$endpoint" mid=$(endpointModelId); [ -z "$mid" ] && mid="$model"
     mkdir -p "$(dirname "$cfg")"
