@@ -36,8 +36,16 @@ Replaces the old fixed "step 7 + step 8" model pulls with a universal,
 hardware-aware chooser:
 
 1. **Scans Ollama** for what is already downloaded (`ollama list`).
-2. Builds a numbered menu from a curated catalog (~29 entries, biggest →
-   smallest), showing only models that:
+2. **Loads the catalog as data**, not code: `loadModelCatalog` picks
+   `ModelLists/<Engine>/<RAM>_GB_Ram.json` for the largest tier ≤ host RAM
+   (48 GB host → `48_GB_Ram.json`; 96 GB → `64_…`; below the smallest tier →
+   smallest file). Engine defaults to `Ollama` via `MODEL_LIST_ENGINE`
+   (Llama.cpp / MLX-LM planned). Each file holds a curated **top-20** of
+   code-generation models, biggest first, with **real download sizes read from
+   the registry manifests**. Schema and editing rules:
+   [ModelLists/README.md](../ModelLists/README.md). Parsed with `python3`,
+   with a `sed` fallback.
+3. Builds a numbered menu from that catalog, showing only models that:
    - **fit this host** — estimated need (`size × 1.3 + 2 GB` for KV-cache and
      runtime) must be within the GPU allocation; and
    - are **not yet downloaded**.
@@ -52,32 +60,34 @@ hardware-aware chooser:
    where the registry offers them. Which quants appear is pure fit math
    against the current GPU limit and free disk.
 
-   **Ollama-registry tags only** — `hf.co/*` GGUF entries (which would have
-   added Q5_K_M/Q6_K from HuggingFace) were removed after direct HF pulls
-   reproducibly failed on Ollama 0.32 with `context deadline exceeded` at the
-   final commit, despite complete blob downloads and working resume. Registry
-   pulls work reliably; the retry logic (3 attempts on transient errors) and
-   resume-aware cleanup remain in place for them.
-3. **Verifies every candidate tag against the live registry** before offering
+   **Ollama-registry tags only** — no `hf.co/*` GGUF entries (which would have
+   added Q5_K_M/Q6_K from HuggingFace): direct HF pulls reproducibly failed on
+   Ollama 0.32 with `context deadline exceeded` at the final commit, despite
+   complete blob downloads and working resume. Registry pulls work reliably;
+   the retry logic (3 attempts on transient errors) and resume-aware cleanup
+   remain in place for them. Reaching Q5/Q6 quants is what the planned
+   Llama.cpp engine is for.
+4. **Verifies every candidate tag against the live registry** before offering
    it (parallel manifest probes to `registry.ollama.ai`, cached 24 h — first
    run ~2 s, reruns instant; unreachable network = benefit of the doubt).
    Non-existent tags are hidden with a note, so the menu can never offer a
    pull that would 404. (The registry has no single list-everything endpoint,
    so one tiny probe per candidate is the practical equivalent of the "one
    remote query".)
-4. Menu is capped at **25 options**, ordered **biggest to smallest**, each line
+5. Menu is capped at **25 options**, ordered **biggest to smallest**, each line
    showing download size, estimated RAM need, and a one-line description.
    Last option is always **N) No download**.
-4. After each pull the menu **re-renders** (the just-downloaded model
+6. After each pull the menu **re-renders** (the just-downloaded model
    disappears) and the question **loops until "N"** is chosen.
-5. Disk is re-checked (`size + 5 GB` headroom) immediately before every pull.
+7. Disk is re-checked (`size + 5 GB` headroom) immediately before every pull.
 
-Example behavior on this 48 GB machine (36 GB GPU allocation): the 70B–120B
-entries are filtered out as not fitting; already-present `qwen3.6:35b-a3b` and
-`qwen2.5-coder:7b` are skipped; seven candidates remain from `qwen3:32b`
-(28 GB need) down to `qwen2.5-coder:1.5b` (3 GB need). On a 128 GB Mac the
-same script would offer the 70B/120B tier too — nothing is hardcoded to one
-host.
+Example on this 48 GB machine: it loads `Ollama/48_GB_Ram.json`, whose 20
+entries top out at `qwen3-coder:30b-a3b-q8_0` (30 GB → ~41 GB need, so it
+appears only with the GPU limit raised to 43 GB, not at the 36 GB default).
+Already-downloaded models drop out, unavailable tags are hidden, and anything
+too big for the free disk is withheld with a count. A 128 GB Mac would load
+`128_GB_Ram.json` and see the `gpt-oss:120b` / 70B tier instead — the host
+picks its own list, nothing is hardcoded.
 
 ## Why it is necessary
 

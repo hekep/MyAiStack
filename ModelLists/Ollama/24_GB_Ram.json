@@ -1,0 +1,28 @@
+{
+  "engine": "Ollama",
+  "ram_gb": 24,
+  "updated": "2026-08-24",
+  "notes": "Top-20 code-generation models for a 24 GB host, biggest first. size_gb = actual download size from the Ollama registry manifest (probed 2026-08-24). The installer filters further by the CURRENT GPU limit (need = size_gb * 1.3 + 2) and by free disk, so the largest entries appear only once iogpu.wired_limit_mb is raised. Tight tier: the 12-13 GB entries need a raised GPU limit to load.",
+  "models": [
+    {"tag": "devstral:24b", "size_gb": 13, "description": "Mistral Devstral 24B \u2014 best tool-call reliability"},
+    {"tag": "magistral:24b", "size_gb": 13, "description": "Mistral Magistral 24B \u2014 reasoning"},
+    {"tag": "gpt-oss:20b", "size_gb": 13, "description": "OpenAI open-weight MoE 20B"},
+    {"tag": "codestral:22b", "size_gb": 12, "description": "Mistral Codestral 22B \u2014 code specialist"},
+    {"tag": "qwen3:14b", "size_gb": 9, "description": "Qwen3 14B dense"},
+    {"tag": "qwen2.5-coder:14b", "size_gb": 8, "description": "Qwen2.5-Coder 14B dense"},
+    {"tag": "qwen2.5-coder:7b-instruct-q8_0", "size_gb": 8, "description": "Qwen2.5-Coder 7B @ q8_0"},
+    {"tag": "phi4:14b", "size_gb": 8, "description": "Microsoft Phi-4 14B"},
+    {"tag": "gemma3:12b", "size_gb": 8, "description": "Google Gemma 3 12B"},
+    {"tag": "deepseek-coder-v2:16b", "size_gb": 8, "description": "DeepSeek-Coder-V2 16B MoE"},
+    {"tag": "codellama:13b", "size_gb": 7, "description": "Meta CodeLlama 13B (legacy)"},
+    {"tag": "qwen3:8b", "size_gb": 5, "description": "Qwen3 8B dense"},
+    {"tag": "llama3.1:8b", "size_gb": 5, "description": "Meta Llama 3.1 8B"},
+    {"tag": "codegemma:7b", "size_gb": 5, "description": "Google CodeGemma 7B"},
+    {"tag": "yi-coder:9b", "size_gb": 5, "description": "01.AI Yi-Coder 9B"},
+    {"tag": "qwen2.5-coder:7b", "size_gb": 4, "description": "Qwen2.5-Coder 7B \u2014 good FIM/autocomplete, sidekick tier"},
+    {"tag": "opencoder:8b", "size_gb": 4, "description": "OpenCoder 8B"},
+    {"tag": "granite4:tiny-h", "size_gb": 4, "description": "IBM Granite 4 tiny"},
+    {"tag": "gemma3:4b", "size_gb": 3, "description": "Google Gemma 3 4B"},
+    {"tag": "qwen2.5-coder:3b", "size_gb": 2, "description": "Qwen2.5-Coder 3B \u2014 low-latency autocomplete"}
+  ]
+}

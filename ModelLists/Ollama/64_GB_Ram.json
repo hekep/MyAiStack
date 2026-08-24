@@ -1,0 +1,28 @@
+{
+  "engine": "Ollama",
+  "ram_gb": 64,
+  "updated": "2026-08-24",
+  "notes": "Top-20 code-generation models for a 64 GB host, biggest first. size_gb = actual download size from the Ollama registry manifest (probed 2026-08-24). The installer filters further by the CURRENT GPU limit (need = size_gb * 1.3 + 2) and by free disk, so the largest entries appear only once iogpu.wired_limit_mb is raised.",
+  "models": [
+    {"tag": "llama3.3:70b", "size_gb": 40, "description": "Meta Llama 3.3 70B dense \u2014 general purpose"},
+    {"tag": "deepseek-r1:70b", "size_gb": 40, "description": "DeepSeek-R1 70B \u2014 reasoning-tuned"},
+    {"tag": "qwen3.6:35b-a3b-q8_0", "size_gb": 36, "description": "Qwen3.6 35B-A3B @ q8_0 \u2014 effectively lossless daily driver"},
+    {"tag": "qwen3.6:35b-a3b-mxfp8", "size_gb": 35, "description": "Qwen3.6 35B-A3B @ mxfp8 \u2014 8-bit, coding-strong"},
+    {"tag": "qwen2.5-coder:32b-instruct-q8_0", "size_gb": 32, "description": "Qwen2.5-Coder 32B dense @ q8_0 \u2014 max dense-coder quality"},
+    {"tag": "qwen3-coder:30b-a3b-q8_0", "size_gb": 30, "description": "Qwen3-Coder 30B MoE @ q8_0 \u2014 best quality-per-GB coder"},
+    {"tag": "qwen3.6:35b-a3b", "size_gb": 22, "description": "Qwen3.6 35B-A3B @ q4_K_M, 256K ctx \u2014 fast agentic MoE"},
+    {"tag": "qwen3:32b", "size_gb": 19, "description": "Qwen3 32B dense \u2014 general"},
+    {"tag": "qwen2.5-coder:32b", "size_gb": 18, "description": "Qwen2.5-Coder 32B dense @ q4_K_M"},
+    {"tag": "deepseek-r1:32b", "size_gb": 18, "description": "DeepSeek-R1 32B \u2014 reasoning"},
+    {"tag": "granite4:small-h", "size_gb": 18, "description": "IBM Granite 4 small \u2014 enterprise-tuned"},
+    {"tag": "qwen3-coder:30b", "size_gb": 17, "description": "Qwen3-Coder 30B MoE @ q4_K_M"},
+    {"tag": "qwen3:30b-a3b", "size_gb": 17, "description": "Qwen3 30B-A3B MoE \u2014 fast general"},
+    {"tag": "gemma3:27b", "size_gb": 16, "description": "Google Gemma 3 27B"},
+    {"tag": "qwen2.5-coder:14b-instruct-q8_0", "size_gb": 15, "description": "Qwen2.5-Coder 14B @ q8_0"},
+    {"tag": "mistral-small3.2:24b", "size_gb": 14, "description": "Mistral Small 3.2 24B \u2014 general"},
+    {"tag": "devstral:24b", "size_gb": 13, "description": "Mistral Devstral 24B \u2014 best tool-call reliability"},
+    {"tag": "gpt-oss:20b", "size_gb": 13, "description": "OpenAI open-weight MoE 20B"},
+    {"tag": "codestral:22b", "size_gb": 12, "description": "Mistral Codestral 22B \u2014 code specialist"},
+    {"tag": "qwen2.5-coder:7b", "size_gb": 4, "description": "Qwen2.5-Coder 7B \u2014 good FIM/autocomplete, sidekick tier"}
+  ]
+}
