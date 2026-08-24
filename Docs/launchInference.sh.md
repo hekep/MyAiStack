@@ -1,0 +1,77 @@
+# launchInference.sh — engine, model, context, network, then serve
+
+## What it does
+
+Everything about **running** a local model, which is deliberately not the
+installer's job: pick the engine, pick a model installed for that engine,
+choose the context size, choose which network interface to bind, free memory,
+check the model actually fits, start the server, and — where the engine
+supports it — hand the endpoint to the Claude CLI.
+
+(Renamed from `aiModelLauncher.sh`, and generalised from Ollama-only to all
+three engines.)
+
+## How it works — one function per decision
+
+| Function | What | Notes |
+|---|---|---|
+| `launchInferenceEngineSelector` | Lists installed engines with their model counts and asks which to launch | **Asked only when more than one engine is installed**; with exactly one it says so and proceeds. Previous choice is the default |
+| `launchInferenceModelSelector <engine>` | Numbered menu of the models installed **for that engine**, with on-disk sizes | Ollama reads `ollama list`; llama.cpp scans `~/Models/llama.cpp`; MLX-LM scans the HuggingFace cache |
+| `launchInferenceContextSelector <engine> <model>` | **Numeric menu: 32K / 64K / 128K (default) / 256K / 512K / 1024K** | Larger sizes appear **only when they fit**: weights + estimated KV cache + 2 GB must stay inside the GPU budget. For Ollama it also queries `/api/show` for the model's own ceiling and hides anything beyond it |
+| `launchInferenceNetworkSelector <engine>` | localhost (default) or LAN — **for every engine**, not just Ollama | Refuses non-private addresses, warns that no engine authenticates, notes the DHCP caveat |
+| `launchInferenceFreeResources` | Every open desktop app, biggest memory first, `Close? [y/N]` | Never touches the app hosting this session, Finder, or a running engine |
+| `launchInferencePrerequisites <engine> <model> <ctx>` | Hard gate: weights + KV + runtime vs. GPU budget | Fails with the exact `sysctl` command to raise the limit |
+| `launchInferenceStart <engine> <model> <ctx> <bind>` | Starts the engine's server and reports endpoint, memory and CPU | Offers to restart a server that is already running. Sets `LAUNCH_ENDPOINT` |
+| `launchInferenceClaudeCli <engine> <model>` | Claude CLI wired to the endpoint, with the session question (C/r/n) and a small local model on the background tier | **Ollama only** — see below |
+| `launchInference` | Wrapper: runs all of the above in order | — |
+
+Choices persist in `~/.launchInference.conf`, so the next run defaults to what
+you picked last.
+
+## What each engine is started with
+
+| Engine | Command | API | Port |
+|---|---|---|---|
+| Ollama | `ollama serve` with `OLLAMA_CONTEXT_LENGTH`, `OLLAMA_HOST`, flash attention + q8_0 KV cache, then loads the model with a 60 min keep-alive | **Anthropic** + OpenAI | 11434 |
+| llama.cpp | `llama-server -m <gguf> -c <ctx> --host <bind> --port` | OpenAI-compatible | 8080 |
+| MLX-LM | `mlx_lm.server --model <repo> --host <bind> --port` | OpenAI-compatible | 8081 |
+
+**Claude CLI works with Ollama only.** Claude Code speaks the Anthropic
+Messages API, which Ollama serves natively; llama.cpp and MLX-LM serve
+OpenAI-compatible APIs. For those two the script prints the endpoint and says
+so plainly rather than launching a session that would fail.
+
+## The context estimate
+
+KV cache is estimated as `ctxK × model_GB / 200` — calibrated against a 30B-class
+model at f16 (~12.8 GB at 128K) and scaled by model size. It is an estimate,
+stated as such in the menu; the point is to keep you from choosing a context
+that quietly pushes the machine into swap.
+
+Measured example on this 48 GB Mac (43 GB GPU limit, qwen3.6 at 23 GB): 32K,
+64K and 128K are offered; 256K+ are filtered out, and Ollama reports the model
+would allow 256K if there were memory for it.
+
+## Why it is necessary
+
+- **Installing and serving are different jobs.** install.sh no longer starts
+  servers or asks about exposure; it only puts software and weights on disk.
+  Everything runtime-shaped lives here, so re-running the installer never
+  disturbs a running server.
+- **Context is the setting people get wrong.** Ollama's 4k default silently
+  truncates Claude Code's system prompt, which is what produced the confused,
+  mixed answers early in this project. Making it an explicit, memory-checked
+  choice removes that whole class of failure.
+- **The memory maths belongs before the launch**, not after a model has already
+  started swapping.
+
+## Usage
+
+```bash
+./launchInference.sh                       # full flow
+```
+
+```bash
+source launchInference.sh                  # à la carte, e.g.:
+launchInferenceStart Ollama qwen3.6:35b-a3b 131072 127.0.0.1
+```

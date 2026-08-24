@@ -57,7 +57,7 @@ aiModelTestReset() {
 }
 
 # the launcher provides the shared numbered model-selector menu
-AI_LAUNCHER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/aiModelLauncher.sh"
+AI_LAUNCHER="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/launchInference.sh"
 
 # ---------- 1. server reachable ----------------------------------------------
 aiModelTestServer() {
@@ -68,7 +68,7 @@ aiModelTestServer() {
         ok "Ollama server up: $v"
         R_server=PASS
     else
-        fail "No Ollama server at ${API}. Start it (aiModelLauncher.sh / installAiStackOllamaServer)."
+        fail "No Ollama server at ${API}. Start it with ./launchInference.sh"
         R_server=FAIL
         return 1
     fi
@@ -241,7 +241,7 @@ print(ms[0].get('context_length', 0) if ms else 0)" 2>/dev/null)
     else
         fail "Context window is only ${ctx} tokens. Claude Code's system prompt alone overflows it —"
         fail "this causes exactly the confused/mixed answers seen. Fix: restart the server with"
-        fail "  OLLAMA_CONTEXT_LENGTH=32768 ollama serve   (aiModelLauncher.sh now does this)"
+        fail "  ./launchInference.sh sets the context when it starts the engine"
         R_context=FAIL
     fi
 }
@@ -265,14 +265,14 @@ aiModelTest() {
 
     if [ -z "$MODEL" ]; then
         # no argument: offer the same numbered menu of installed models that
-        # aiModelLauncher.sh uses (launchOllamaModelSelector)
+        # launchInference.sh provides it (launchInferenceModelSelector)
         if [ -f "$AI_LAUNCHER" ]; then
             source "$AI_LAUNCHER"
-            MODEL=$(launchOllamaModelSelector) || { fail "No model selected."; return 1; }
+            MODEL=$(launchInferenceModelSelector Ollama) || { fail "No model selected."; return 1; }
         else
             MODEL=$(ollama list 2>/dev/null | awk 'NR==2 {print $1}')
             [ -z "$MODEL" ] && { fail "No models downloaded."; return 1; }
-            warn "aiModelLauncher.sh not found — testing first downloaded: ${MODEL}"
+            warn "launchInference.sh not found — testing first downloaded: ${MODEL}"
         fi
     fi
     info "Model under test: ${BOLD}${MODEL}${RESET}"

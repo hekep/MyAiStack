@@ -1,0 +1,516 @@
+#!/bin/bash
+#
+# launchInference.sh — pick an engine, a model and a context size, serve it,
+#                      and (where supported) hand it to the Claude CLI.
+#
+# Installing is install.sh's job. This script owns everything about *running*:
+# which engine, which model, how much context, which network interface, how
+# much memory to free first, and how to keep the model resident.
+#
+#   launchInferenceEngineSelector    -> engine (asked only if several exist)
+#   launchInferenceModelSelector     -> a model installed FOR that engine
+#   launchInferenceContextSelector   -> 32K / 64K / 128K (default) / bigger
+#   launchInferenceNetworkSelector   -> localhost or LAN, for ANY engine
+#   launchInferenceFreeResources     -> close memory-hungry desktop apps
+#   launchInferencePrerequisites     -> weights + KV cache must fit the GPU
+#   launchInferenceStart             -> start the engine's server, report usage
+#   launchInferenceClaudeCli         -> Claude CLI wired to the local endpoint
+#   launchInference                  -> wrapper: runs all of the above in order
+#
+# Usage:
+#   ./launchInference.sh             # full flow
+#   source launchInference.sh        # then call any function yourself
+#
+set -u
+
+# ---------- helpers ----------------------------------------------------------
+BOLD=$(tput bold 2>/dev/null || true); RESET=$(tput sgr0 2>/dev/null || true)
+GREEN=$(tput setaf 2 2>/dev/null || true); YELLOW=$(tput setaf 3 2>/dev/null || true)
+RED=$(tput setaf 1 2>/dev/null || true); BLUE=$(tput setaf 4 2>/dev/null || true)
+
+info()  { echo "${BLUE}==>${RESET} $*" >&2; }
+ok()    { echo "${GREEN} ✓ ${RESET} $*" >&2; }
+warn()  { echo "${YELLOW} ! ${RESET} $*" >&2; }
+fail()  { echo "${RED} ✗ ${RESET} $*" >&2; }
+
+ask_yn() {   # Enter = yes
+    local a; printf "%s%s%s [Y/n] " "${BOLD}" "$1" "${RESET}" >&2
+    read -r a </dev/tty || return 1
+    case "$a" in ""|[Yy]|[Yy]es) return 0 ;; *) return 1 ;; esac
+}
+ask_ny() {   # Enter = no
+    local a; printf "%s%s%s [y/N] " "${BOLD}" "$1" "${RESET}" >&2
+    read -r a </dev/tty || return 1
+    case "$a" in [Yy]|[Yy]es) return 0 ;; *) return 1 ;; esac
+}
+ask_val() {  # free-form with default; echoes the answer
+    local a; printf "%s%s%s [%s]: " "${BOLD}" "$1" "${RESET}" "$2" >&2
+    read -r a </dev/tty || { echo "$2"; return; }
+    echo "${a:-$2}"
+}
+
+# ---------- persisted choices (previous answer = next default) ---------------
+SETTINGS_FILE="$HOME/.launchInference.conf"
+tune_get() { [ -f "$SETTINGS_FILE" ] && sed -n "s/^$1=//p" "$SETTINGS_FILE" | tail -1; }
+tune_set() {
+    local tmp; tmp=$(grep -v "^$1=" "$SETTINGS_FILE" 2>/dev/null)
+    { [ -n "$tmp" ] && printf '%s\n' "$tmp"; printf '%s=%s\n' "$1" "$2"; } > "$SETTINGS_FILE"
+}
+
+# ---------- engines -----------------------------------------------------------
+LLAMACPP_MODEL_DIR="${LLAMACPP_MODEL_DIR:-$HOME/Models/llama.cpp}"
+MLX_HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}/hub"
+OLLAMA_PORT=11434; LLAMACPP_PORT=8080; MLX_PORT=8081
+
+llamacpp_installed() { command -v llama-server >/dev/null 2>&1 || command -v llama-cli >/dev/null 2>&1; }
+mlxml_installed()    { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^mlx-lm'; }
+ollama_installed()   { command -v ollama >/dev/null 2>&1; }
+
+lan_ip() { ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null; }
+
+engine_port() {
+    case "$1" in
+        Llama.cpp) echo "$LLAMACPP_PORT" ;;
+        MLX-LM)    echo "$MLX_PORT" ;;
+        Ollama)    echo "$OLLAMA_PORT" ;;
+    esac
+}
+engine_up() {   # $1 engine, $2 host
+    local p; p=$(engine_port "$1")
+    case "$1" in
+        Ollama) curl -sf --max-time 3 "http://${2}:${p}/api/version" >/dev/null 2>&1 ;;
+        *)      curl -sf --max-time 3 "http://${2}:${p}/v1/models"   >/dev/null 2>&1 ;;
+    esac
+}
+
+# models installed per engine, one tag per line
+llamacppListInstalled() {
+    [ -d "$LLAMACPP_MODEL_DIR" ] || return 0
+    local f b
+    for f in "$LLAMACPP_MODEL_DIR"/*.gguf; do
+        [ -e "$f" ] || continue
+        b=$(basename "$f" .gguf)
+        printf '%s\n' "$(printf '%s' "$b" | sed 's|@|:|; s|__|/|g')"
+    done
+}
+mlxmlListInstalled() {
+    [ -d "$MLX_HF_CACHE" ] || return 0
+    local d b
+    for d in "$MLX_HF_CACHE"/models--*; do
+        [ -d "$d" ] || continue
+        b=$(basename "$d")
+        printf '%s\n' "$(printf '%s' "${b#models--}" | sed 's|--|/|')"
+    done
+}
+ollamaListInstalled() { ollama list 2>/dev/null | awk 'NR>1 {print $1}'; }
+
+engineListInstalled() {
+    case "$1" in
+        Llama.cpp) llamacppListInstalled ;;
+        MLX-LM)    mlxmlListInstalled ;;
+        Ollama)    ollamaListInstalled ;;
+    esac
+}
+
+# on-disk size in GB of one model (used for the memory maths)
+engineModelSizeGb() {
+    local engine="$1" tag="$2" f d
+    case "$engine" in
+        Llama.cpp)
+            f="${LLAMACPP_MODEL_DIR}/$(printf '%s' "$tag" | sed 's|/|__|g; s|:|@|').gguf"
+            [ -e "$f" ] && du -m "$f" 2>/dev/null | awk '{printf "%d", $1/1024}' || echo 0 ;;
+        MLX-LM)
+            d="${MLX_HF_CACHE}/models--$(printf '%s' "$tag" | sed 's|/|--|')"
+            [ -d "$d" ] && du -sm "$d" 2>/dev/null | awk '{printf "%d", $1/1024}' || echo 0 ;;
+        Ollama)
+            ollama list 2>/dev/null | awk -v t="$tag" '$1==t {print ($4=="GB")? $3 : 1; exit}' \
+                | awk '{printf "%d", $1}' ;;
+    esac
+}
+
+# ---------- 1. engine selector -----------------------------------------------
+# Prints the chosen engine on stdout. Asked only when more than one is present.
+launchInferenceEngineSelector() {
+    local engines=() e
+    llamacpp_installed && engines+=("Llama.cpp")
+    mlxml_installed    && engines+=("MLX-LM")
+    ollama_installed   && engines+=("Ollama")
+
+    if [ "${#engines[@]}" -eq 0 ]; then
+        fail "No inference engine installed — run ./install.sh first."
+        return 1
+    fi
+    if [ "${#engines[@]}" -eq 1 ]; then
+        ok "Only one engine installed: ${engines[0]}"
+        echo "${engines[0]}"
+        return 0
+    fi
+
+    echo >&2
+    echo "${BOLD}Installed engines:${RESET}" >&2
+    local i=1 n
+    for e in "${engines[@]}"; do
+        n=$(engineListInstalled "$e" | grep -c . || true)
+        printf "  %d) %-12s %s model(s) installed\n" "$i" "$e" "${n:-0}" >&2
+        i=$((i+1))
+    done
+    local def sel
+    def=$(tune_get ENGINE); def="${def:-${engines[0]}}"
+    local defnum=1 j=1
+    for e in "${engines[@]}"; do [ "$e" = "$def" ] && defnum=$j; j=$((j+1)); done
+    while true; do
+        sel=$(ask_val "Select engine [1-${#engines[@]}]" "$defnum")
+        case "$sel" in *[!0-9]*|"") echo "Enter a number." >&2; continue ;; esac
+        [ "$sel" -ge 1 ] && [ "$sel" -le "${#engines[@]}" ] && break
+        echo "Out of range." >&2
+    done
+    tune_set ENGINE "${engines[$((sel-1))]}"
+    echo "${engines[$((sel-1))]}"
+}
+
+# ---------- 2. model selector -------------------------------------------------
+# $1 = engine. Prints the chosen model tag on stdout.
+launchInferenceModelSelector() {
+    local engine="${1:?engine required}" models=() m
+    while IFS= read -r m; do [ -n "$m" ] && models+=("$m"); done < <(engineListInstalled "$engine")
+    if [ "${#models[@]}" -eq 0 ]; then
+        fail "No models installed for ${engine} — run ./install.sh to download one."
+        return 1
+    fi
+
+    echo >&2
+    echo "${BOLD}${engine} models:${RESET}" >&2
+    local i=1 sz
+    for m in "${models[@]}"; do
+        sz=$(engineModelSizeGb "$engine" "$m")
+        printf "  %2d) %-52s %s GB\n" "$i" "$m" "${sz:-?}" >&2
+        i=$((i+1))
+    done
+    local def sel defnum=1 j=1
+    def=$(tune_get "MODEL_${engine}")
+    for m in "${models[@]}"; do [ "$m" = "$def" ] && defnum=$j; j=$((j+1)); done
+    while true; do
+        sel=$(ask_val "Select model [1-${#models[@]}]" "$defnum")
+        case "$sel" in *[!0-9]*|"") echo "Enter a number." >&2; continue ;; esac
+        [ "$sel" -ge 1 ] && [ "$sel" -le "${#models[@]}" ] && break
+        echo "Out of range." >&2
+    done
+    tune_set "MODEL_${engine}" "${models[$((sel-1))]}"
+    echo "${models[$((sel-1))]}"
+}
+
+# ---------- 3. context selector ----------------------------------------------
+# $1 engine, $2 model. Prints the chosen context length in tokens.
+# Offers 32K / 64K / 128K (default) and larger sizes only when the weights plus
+# the estimated KV cache still fit the GPU budget.
+launchInferenceContextSelector() {
+    local engine="${1:?}" model="${2:?}" size_gb gpu_gb total_gb limit_mb
+    size_gb=$(engineModelSizeGb "$engine" "$model"); [ "${size_gb:-0}" -lt 1 ] && size_gb=1
+    total_gb=$(( $(sysctl -n hw.memsize) / 1073741824 ))
+    limit_mb=$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)
+    if [ "$limit_mb" -gt 0 ]; then gpu_gb=$(( limit_mb / 1024 )); else gpu_gb=$(( total_gb * 3 / 4 )); fi
+
+    # model's own ceiling, when the engine can tell us (Ollama can)
+    local model_max=0
+    if [ "$engine" = "Ollama" ] && curl -sf --max-time 3 "http://127.0.0.1:${OLLAMA_PORT}/api/version" >/dev/null 2>&1; then
+        model_max=$(curl -sf --max-time 8 "http://127.0.0.1:${OLLAMA_PORT}/api/show" \
+                    -d "{\"model\":\"${model}\"}" 2>/dev/null | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin).get("model_info",{})
+    print(next((v for k,v in d.items() if k.endswith(".context_length")), 0))
+except Exception: print(0)' 2>/dev/null)
+    fi
+    [ -z "$model_max" ] && model_max=0
+
+    echo >&2
+    echo "${BOLD}Context size${RESET} — model ~${size_gb} GB, GPU budget ~${gpu_gb} GB" >&2
+    [ "$model_max" -gt 0 ] && echo "    model supports up to $(( model_max / 1024 ))K tokens" >&2
+    echo "    KV-cache estimate: ctxK x ${size_gb} / 200 GB (halved by q8_0 cache)" >&2
+
+    local opts=() labels=() k kv need
+    for k in 32 64 128 256 512 1024; do
+        kv=$(( k * size_gb / 200 )); [ "$kv" -lt 1 ] && kv=1
+        need=$(( size_gb + kv + 2 ))
+        [ "$need" -gt "$gpu_gb" ] && continue
+        [ "$model_max" -gt 0 ] && [ $(( k * 1024 )) -gt "$model_max" ] && continue
+        opts+=("$(( k * 1024 ))")
+        labels+=("$(printf '%4sK tokens   (~%d GB KV cache, ~%d GB total)' "$k" "$kv" "$need")")
+    done
+    if [ "${#opts[@]}" -eq 0 ]; then
+        warn "Even 32K does not fit the GPU budget — using 32768 anyway; expect swapping."
+        echo 32768; return 0
+    fi
+
+    local i=1 defnum=1 j=1 prev
+    prev=$(tune_get "CTX_${engine}"); prev="${prev:-131072}"
+    for i in "${!opts[@]}"; do
+        [ "${opts[$i]}" = "$prev" ] && defnum=$(( i + 1 ))
+    done
+    # default to 128K when available and nothing was chosen before
+    if [ -z "$(tune_get "CTX_${engine}")" ]; then
+        j=1; for i in "${!opts[@]}"; do [ "${opts[$i]}" = "131072" ] && defnum=$(( i + 1 )); done
+    fi
+    for i in "${!opts[@]}"; do
+        printf "  %d) %s\n" "$(( i + 1 ))" "${labels[$i]}" >&2
+    done
+    local sel
+    while true; do
+        sel=$(ask_val "Select context [1-${#opts[@]}]" "$defnum")
+        case "$sel" in *[!0-9]*|"") echo "Enter a number." >&2; continue ;; esac
+        [ "$sel" -ge 1 ] && [ "$sel" -le "${#opts[@]}" ] && break
+        echo "Out of range." >&2
+    done
+    tune_set "CTX_${engine}" "${opts[$((sel-1))]}"
+    echo "${opts[$((sel-1))]}"
+}
+
+# ---------- 4. network selector (every engine, not just Ollama) --------------
+# $1 = engine. Prints the bind address on stdout.
+launchInferenceNetworkSelector() {
+    local engine="${1:?}" ip def sel
+    ip=$(lan_ip)
+    echo >&2
+    echo "${BOLD}Network exposure for ${engine}${RESET}" >&2
+    echo "  1) localhost only — 127.0.0.1, nothing else can connect (safest)" >&2
+    if [ -n "$ip" ]; then
+        echo "  2) LAN           — ${ip}, reachable from your local network" >&2
+        warn "LAN mode has NO authentication: anyone on the network can use this model."
+    fi
+    def=$(tune_get "BIND_${engine}"); def="${def:-1}"
+    [ -z "$ip" ] && def=1
+    while true; do
+        sel=$(ask_val "Select exposure [1-2]" "$def")
+        case "$sel" in
+            1) tune_set "BIND_${engine}" 1; echo "127.0.0.1"; return 0 ;;
+            2) if [ -z "$ip" ]; then echo "No LAN address detected." >&2; continue; fi
+               case "$ip" in
+                   192.168.*|10.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) : ;;
+                   *) fail "${ip} is not a private-range address — refusing to expose."; continue ;;
+               esac
+               tune_set "BIND_${engine}" 2
+               warn "DHCP caveat: give this Mac a reservation, the bind is to ${ip}."
+               echo "$ip"; return 0 ;;
+            *) echo "Enter 1 or 2." >&2 ;;
+        esac
+    done
+}
+
+# ---------- 5. free resources -------------------------------------------------
+# Every open desktop app, biggest memory user first, "Close? [y/N]" each.
+# Never touches the app hosting this session, Finder, or the engines.
+launchInferenceFreeResources() {
+    info "Scanning open desktop applications..."
+    local ancestors="" anc=$$
+    while [ -n "$anc" ] && [ "$anc" -gt 1 ] 2>/dev/null; do
+        ancestors="$ancestors $anc"
+        anc=$(ps -o ppid= -p "$anc" 2>/dev/null | tr -d ' ')
+    done
+
+    local apps
+    apps=$(osascript -e 'tell application "System Events"
+        set out to ""
+        repeat with p in (every application process whose background only is false)
+            set out to out & (unix id of p) & tab & (name of p) & linefeed
+        end repeat
+        return out
+    end tell' 2>/dev/null)
+    [ -z "$apps" ] && { warn "Could not enumerate desktop apps — skipping."; return 0; }
+
+    local rows="" pid name mem_mb
+    while IFS=$'\t' read -r pid name; do
+        [ -z "$pid" ] && continue
+        case " $ancestors " in *" $pid "*)
+            warn "\"$name\" hosts this session — skipping."; continue ;;
+        esac
+        case "$name" in
+            Finder) continue ;;
+            [Oo]llama*|*llama-server*|*mlx*) continue ;;
+        esac
+        mem_mb=$(ps -axo rss=,command= | awk -v app="$(echo "$name" | tr '[:upper:]' '[:lower:]').app/" '
+            index(tolower($0), app) {s+=$1} END {printf "%d", s/1024}')
+        [ "$mem_mb" -eq 0 ] && mem_mb=$(ps -o rss= -p "$pid" 2>/dev/null | awk '{printf "%d", $1/1024}')
+        [ -z "$mem_mb" ] && mem_mb=0
+        rows="${rows}${mem_mb}|${pid}|${name}
+"
+    done <<< "$apps"
+    [ -z "$rows" ] && { ok "No closable desktop apps found."; return 0; }
+
+    local mem pid2 name2
+    while IFS='|' read -r mem pid2 name2; do
+        [ -z "$name2" ] && continue
+        if [ "$mem" -ge 1024 ]; then
+            printf "  %-28s using %s%s GB%s of memory. " "$name2" "$BOLD" \
+                   "$(awk -v m="$mem" 'BEGIN{printf "%.1f", m/1024}')" "$RESET" >&2
+        else
+            printf "  %-28s using %s%d MB%s of memory. " "$name2" "$BOLD" "$mem" "$RESET" >&2
+        fi
+        if ask_ny "Close?"; then
+            osascript -e "quit app \"$name2\"" 2>/dev/null
+            sleep 2
+            kill -0 "$pid2" 2>/dev/null && { warn "Forcing ${name2} closed."; kill -9 "$pid2" 2>/dev/null; }
+            ok "\"$name2\" closed."
+        else
+            ok "Keeping \"$name2\"."
+        fi
+    done <<< "$(printf '%s' "$rows" | sort -t'|' -k1 -rn)"
+
+    ok "Roughly $(vm_stat | awk '/Pages free/ {f=$3} /Pages inactive/ {i=$3} END {gsub(/\./,"",f); gsub(/\./,"",i); printf "%.1f", (f+i)*16384/1073741824}') GB of memory free/reclaimable."
+}
+
+# ---------- 6. prerequisites --------------------------------------------------
+# $1 engine, $2 model, $3 context. Fails when it cannot fit.
+launchInferencePrerequisites() {
+    local engine="${1:?}" model="${2:?}" ctx="${3:?}" size_gb kv need gpu_gb total_gb limit_mb avail
+    size_gb=$(engineModelSizeGb "$engine" "$model"); [ "${size_gb:-0}" -lt 1 ] && size_gb=1
+    total_gb=$(( $(sysctl -n hw.memsize) / 1073741824 ))
+    limit_mb=$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)
+    if [ "$limit_mb" -gt 0 ]; then gpu_gb=$(( limit_mb / 1024 )); else gpu_gb=$(( total_gb * 3 / 4 )); fi
+    kv=$(( (ctx / 1024) * size_gb / 200 )); [ "$kv" -lt 1 ] && kv=1
+    need=$(( size_gb + kv + 2 ))
+
+    info "Prerequisites for ${model} @ $(( ctx / 1024 ))K on ${engine}"
+    echo "    weights ~${size_gb} GB + KV ~${kv} GB + runtime 2 GB = ~${need} GB" >&2
+    echo "    GPU budget: ${gpu_gb} GB of ${total_gb} GB RAM" >&2
+    if [ "$need" -gt "$gpu_gb" ]; then
+        fail "Does not fit: needs ~${need} GB, budget is ${gpu_gb} GB."
+        fail "Raise it:  sudo sysctl iogpu.wired_limit_mb=$(( (total_gb - 5) * 1024 ))"
+        fail "...or choose a smaller context / model."
+        return 1
+    fi
+    avail=$(vm_stat | awk '/Pages free/ {f=$3} /Pages inactive/ {i=$3} /Pages speculative/ {s=$3} END {gsub(/\./,"",f); gsub(/\./,"",i); gsub(/\./,"",s); printf "%d", (f+i+s)*16384/1073741824}')
+    [ "$avail" -lt "$need" ] && warn "Only ~${avail} GB free right now — macOS will evict caches."
+    ok "Fits: ~${need} GB of ${gpu_gb} GB."
+}
+
+# ---------- 7. start the engine ----------------------------------------------
+# $1 engine, $2 model, $3 context, $4 bind address.
+launchInferenceStart() {
+    local engine="${1:?}" model="${2:?}" ctx="${3:?}" bind="${4:?}" port
+    port=$(engine_port "$engine")
+
+    if engine_up "$engine" "$bind"; then
+        warn "${engine} is already serving on ${bind}:${port}."
+        if ask_yn "Restart it with the settings chosen here?"; then
+            case "$engine" in
+                Ollama)    brew services stop ollama >/dev/null 2>&1; pkill -f "ollama serve" 2>/dev/null ;;
+                Llama.cpp) pkill -f "llama-server" 2>/dev/null ;;
+                MLX-LM)    pkill -f "mlx_lm.server" 2>/dev/null ;;
+            esac
+            sleep 2
+        else
+            ok "Leaving the running server as it is."
+            LAUNCH_ENDPOINT="http://${bind}:${port}"
+            return 0
+        fi
+    fi
+
+    info "Starting ${engine} — ${model} @ $(( ctx / 1024 ))K on ${bind}:${port}"
+    case "$engine" in
+        Ollama)
+            OLLAMA_HOST="${bind}:${port}" OLLAMA_CONTEXT_LENGTH="$ctx" \
+                OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE="${OLLAMA_KV_CACHE_TYPE:-q8_0}" \
+                nohup ollama serve >/dev/null 2>&1 &
+            sleep 3
+            engine_up "$engine" "$bind" || { fail "Ollama did not come up."; return 1; }
+            info "Loading ${model} (first token may take a while)..."
+            curl -sf "http://${bind}:${port}/api/generate" \
+                 -d "{\"model\":\"${model}\",\"keep_alive\":\"60m\"}" >/dev/null \
+                || { fail "Failed to load ${model}."; return 1; }
+            ;;
+        Llama.cpp)
+            local f
+            f="${LLAMACPP_MODEL_DIR}/$(printf '%s' "$model" | sed 's|/|__|g; s|:|@|').gguf"
+            [ -e "$f" ] || { fail "GGUF not found: ${f}"; return 1; }
+            nohup llama-server -m "$f" -c "$ctx" --host "$bind" --port "$port" \
+                  >"${TMPDIR:-/tmp}/llama-server.log" 2>&1 &
+            local t=0
+            while [ "$t" -lt 60 ] && ! engine_up "$engine" "$bind"; do sleep 2; t=$((t+2)); done
+            engine_up "$engine" "$bind" || { fail "llama-server did not come up — see ${TMPDIR:-/tmp}/llama-server.log"; return 1; }
+            ;;
+        MLX-LM)
+            nohup mlx_lm.server --model "$model" --host "$bind" --port "$port" \
+                  >"${TMPDIR:-/tmp}/mlx-server.log" 2>&1 &
+            local t2=0
+            while [ "$t2" -lt 90 ] && ! engine_up "$engine" "$bind"; do sleep 3; t2=$((t2+3)); done
+            engine_up "$engine" "$bind" || { fail "mlx_lm.server did not come up — see ${TMPDIR:-/tmp}/mlx-server.log"; return 1; }
+            ;;
+    esac
+
+    LAUNCH_ENDPOINT="http://${bind}:${port}"
+    local mem cpu pat
+    case "$engine" in
+        Ollama) pat="[o]llama" ;; Llama.cpp) pat="[l]lama-server" ;; MLX-LM) pat="[m]lx_lm.server" ;;
+    esac
+    mem=$(ps -axo rss,command | awk -v p="$pat" '$0 ~ p {s+=$1} END {printf "%.1f", s/1048576}')
+    cpu=$(ps -axo %cpu,command | awk -v p="$pat" '$0 ~ p {s+=$1} END {printf "%.1f", s}')
+    echo >&2
+    echo "${BOLD}=================== Running ===================${RESET}" >&2
+    ok "Engine:   ${engine}"
+    ok "Model:    ${model}"
+    ok "Context:  $(( ctx / 1024 ))K tokens"
+    ok "Endpoint: ${LAUNCH_ENDPOINT}"
+    ok "Memory:   ${mem} GB    Processor: ${cpu} %"
+}
+
+# ---------- 8. Claude CLI -----------------------------------------------------
+# $1 engine, $2 model. Only Ollama speaks the Anthropic API that Claude needs.
+launchInferenceClaudeCli() {
+    local engine="${1:?}" model="${2:?}" endpoint="${LAUNCH_ENDPOINT:-}"
+    if [ "$engine" != "Ollama" ]; then
+        warn "${engine} serves an OpenAI-compatible API at ${endpoint}/v1 — Claude CLI needs"
+        warn "the Anthropic API, which only Ollama provides. Use this endpoint from an"
+        warn "OpenAI-compatible client, or launch Ollama for a Claude CLI session."
+        return 0
+    fi
+    command -v claude >/dev/null 2>&1 || { fail "claude CLI not installed (run ./install.sh)."; return 1; }
+
+    local proj sflag="" answer n
+    proj="$HOME/.claude/projects/$(pwd | sed 's|[/_.]|-|g')"
+    if ls "$proj"/*.jsonl >/dev/null 2>&1; then
+        n=$(ls "$proj"/*.jsonl 2>/dev/null | wc -l | tr -d ' ')
+        info "${n} previous session(s) for this directory."
+        answer=$(ask_val "Session: C = continue latest, r = resume picker, n = new" "C")
+        case "$answer" in
+            [Cc]) sflag="--continue" ;;
+            [Rr]) sflag="--resume" ;;
+            [Nn]) sflag="" ;;
+            *) warn "Unknown answer — continuing latest."; sflag="--continue" ;;
+        esac
+    fi
+
+    # small local model for Claude Code's background (Haiku) tier, if present
+    local haiku="$model" small
+    small=$(ollamaListInstalled | awk '{print}' | grep -E '(:1\.5b|:3b|:7b)$' | head -1)
+    [ -n "$small" ] && [ "$small" != "$model" ] && { haiku="$small"; ok "Background tier -> ${haiku}"; }
+
+    info "Launching Claude CLI in $(pwd) against ${model}..."
+    warn "Local models are weaker than hosted Claude — expect simpler agentic behaviour."
+    ANTHROPIC_BASE_URL="$endpoint" \
+    ANTHROPIC_AUTH_TOKEN="ollama" \
+    ANTHROPIC_API_KEY="" \
+    ANTHROPIC_DEFAULT_SONNET_MODEL="$model" \
+    ANTHROPIC_DEFAULT_OPUS_MODEL="$model" \
+    ANTHROPIC_DEFAULT_HAIKU_MODEL="$haiku" \
+    claude --model "$model" $sflag
+}
+
+# ---------- wrapper -----------------------------------------------------------
+launchInference() {
+    echo "${BOLD}=============================================================${RESET}" >&2
+    echo "${BOLD} Local inference — engine, model, context, network${RESET}" >&2
+    echo "${BOLD}=============================================================${RESET}" >&2
+    local engine model ctx bind
+    engine=$(launchInferenceEngineSelector) || return 1
+    model=$(launchInferenceModelSelector "$engine") || return 1
+    ctx=$(launchInferenceContextSelector "$engine" "$model") || return 1
+    bind=$(launchInferenceNetworkSelector "$engine") || return 1
+    launchInferenceFreeResources
+    launchInferencePrerequisites "$engine" "$model" "$ctx" || return 1
+    launchInferenceStart "$engine" "$model" "$ctx" "$bind" || return 1
+    launchInferenceClaudeCli "$engine" "$model"
+}
+
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
+    launchInference
+fi

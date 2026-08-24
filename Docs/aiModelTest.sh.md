@@ -49,8 +49,8 @@ limitation is the model itself, not the stack.
 PROMPT="Explain APFS snapshots" ./aiModelTest.sh   # custom prompt
 ```
 
-With no argument, the script sources [aiModelLauncher.sh](aiModelLauncher.sh.md)
-and reuses its `launchOllamaModelSelector` — the same numbered menu of
+With no argument, the script sources [launchInference.sh](launchInference.sh.md)
+and reuses its `launchInferenceModelSelector` — the same numbered menu of
 installed models (name + size, pick by number) — so the two tools share one
 selector implementation instead of duplicating it. If the launcher script is
 missing, it falls back to testing the first downloaded model.

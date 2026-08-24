@@ -27,7 +27,6 @@ stack.
 | **`installAiStackMlxmlEngine`** | **MLX-LM** — `uv tool install mlx-lm` | **Default no.** Apple-native, fastest on this chip, publishes 6-bit builds. Pulls in `uv` automatically when accepted. Present → automatic PyPI check, asks only if a newer version exists |
 | **`installAiStackOllamaEngine`** | **Ollama** — brew formula | **Default no.** Managed daemon + Anthropic-compatible API (what Claude CLI talks to), narrowest quant ladder. A standalone `Ollama.app` gets the migrate-to-brew offer; brew-managed gets an upgrade offer only if one exists |
 | `installAiStackUv` | uv | Asked normally; `installAiStackUv required` installs without asking (used by MLX-LM) |
-| `installAiStackOllamaServer` | Ollama server + **network exposure**: localhost-only or LAN-only (private-range IPs only, no authentication warning, DHCP caveat, dedicated LaunchAgent carrying `OLLAMA_CONTEXT_LENGTH=32768`) | Skips entirely if Ollama is absent. Detects the currently active mode and defaults to keeping it |
 | `installAiStackClaudeCli` | Claude Code CLI | Missing → offers install (default Y). Present → automatic version check, asks only if newer exists |
 | **`installAiStackLlamacppModels`** | GGUF files → `~/Models/llama.cpp` | Skipped unless llama.cpp is installed |
 | **`installAiStackMlxmlModels`** | HF repos → HuggingFace cache | Skipped unless MLX-LM is installed |
@@ -40,10 +39,15 @@ stack.
 ```
 sanity → disk gate → Homebrew
       → llama.cpp engine → MLX-LM engine → Ollama engine      (at least one!)
-      → Ollama server → Claude CLI
+      → Claude CLI
       → llama.cpp models → MLX-LM models → Ollama models
       → verification
 ```
+
+**Serving is not an install concern.** Starting an engine, choosing a context
+size and binding a network interface all live in
+[launchInference.sh](launchInference.sh.md); the installer only ensures the
+Ollama daemon is briefly up so that model pulls work.
 
 **If no engine is installed, the wizard cancels** — everything below the engine
 layer is meaningless without one, so the wrapper reports which engines are
@@ -93,9 +97,8 @@ Per-engine download behavior:
   model that loads, swaps, and generates at 1 token/s.
 - **Disk reality**: a single model is 20–30 GB; the hard gate and the
   per-download re-check keep a half-finished pull from filling the disk.
-- **Exposure defaults matter**: many guides suggest `OLLAMA_HOST=0.0.0.0`,
-  which opens an unauthenticated API to every network. Localhost is the
-  default; LAN is an explicit, guarded choice.
+- **Brew must not ask twice**: our questions are the ones that matter, so the
+  brew calls pass `-y` and never re-prompt for the same decision.
 
 ## Usage
 
@@ -109,5 +112,5 @@ installAiStackLlamacppModels         # just the llama.cpp model menu
 ```
 
 Companions: [uninstall.sh.md](uninstall.sh.md) (reversal),
-[aiModelLauncher.sh.md](aiModelLauncher.sh.md) (day-to-day launching),
+[launchInference.sh.md](launchInference.sh.md) (day-to-day launching),
 [aiModelTest.sh.md](aiModelTest.sh.md) (benchmarking after pulls).

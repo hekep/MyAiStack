@@ -19,14 +19,16 @@
 #   installAiStackOllamaEngine    Ollama      — default no; managed daemon + API
 #   --- shared ---
 #   installAiStackUv              uv (pulled in automatically by MLX-LM)
-#   installAiStackOllamaServer    Ollama server; localhost-only or LAN binding
 #   installAiStackClaudeCli       Claude Code CLI (the agent frontend)
 #   --- models, one step per engine, same order, each skipped if absent ---
 #   installAiStackLlamacppModels  GGUF files -> ~/Models/llama.cpp
 #   installAiStackMlxmlModels     HF repos   -> HuggingFace cache
 #   installAiStackOllamaModels    registry tags -> ~/.ollama
 #   installAiStackVerification    status summary
-#   installAiStack               wrapper — runs all of the above in order
+#   installAiStack                wrapper — runs all of the above in order
+#
+# Serving models (engine choice, context size, network exposure, keeping a
+# model resident) is NOT an install concern — that is launchInference.sh.
 #
 # Usage:
 #   ./install.sh                 # full pipeline
@@ -143,7 +145,7 @@ ollama_prune_orphan_blobs() {
     ok "Cleaned up failed-download leftovers: freed $((after - before)) GB (free now: ${after} GB)."
 }
 
-# Where to reach the Ollama API; installAiStackOllamaServer may switch it to a LAN IP.
+# Where to reach the Ollama API (launchInference.sh may bind it to a LAN IP).
 OLLAMA_API="${OLLAMA_API:-127.0.0.1}"
 ollama_server_up() { curl -sf "http://${OLLAMA_API}:11434/api/version" >/dev/null 2>&1; }
 lan_ip() { ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null; }
@@ -273,7 +275,7 @@ installAiStackOllamaEngine() {
                    ~/Library/Preferences/com.electron.ollama.plist \
                    ~/Library/Saved\ Application\ State/com.electron.ollama.savedState
             ok "Ollama.app removed (models preserved)."
-            brew install ollama || { fail "brew install ollama failed."; return 1; }
+            brew install -y ollama || { fail "brew install -y ollama failed."; return 1; }
             ok "Ollama installed via Homebrew: $(ollama --version 2>/dev/null)"
         else
             warn "Keeping the .app. Later steps assume a recent Ollama — update via the app's own updater."
@@ -288,7 +290,7 @@ installAiStackOllamaEngine() {
         fi
         if [ -n "$(brew outdated ollama 2>/dev/null)" ]; then
             warn "A newer Ollama is available."
-            ask "Upgrade Ollama now?" && brew upgrade ollama
+            ask_def "Upgrade Ollama now?" "y" && brew upgrade -y ollama
         else
             ok "Already the latest version."
         fi
@@ -300,108 +302,21 @@ installAiStackOllamaEngine() {
     echo "    advantages: a managed daemon, an Anthropic-compatible API for Claude"
     echo "    CLI, and one-command pulls; its quant ladder is the narrowest."
     ask_def "Install Ollama via Homebrew?" "n" || { warn "Skipping Ollama."; return 0; }
-    brew install ollama || { fail "brew install ollama failed."; return 1; }
+    brew install -y ollama || { fail "brew install -y ollama failed."; return 1; }
     ok "Installed: $(ollama --version 2>/dev/null)"
 }
 
-# ---------- step: server + network exposure ----------------------------------
-installAiStackOllamaServer() {
-    info "installAiStackOllamaServer — server process and network binding"
-    if ! ollama_installed; then
-        warn "Ollama is not installed — no server to start."
-        return 0
-    fi
-
-    echo "    Network exposure options:"
-    echo "      localhost — API on 127.0.0.1 only; nothing else can connect (default, safest)"
-    echo "      LAN       — API bound to this Mac's private LAN address; reachable from your"
-    echo "                  local network only. NOTE: Ollama has NO authentication."
-    # detect what is active NOW; the default answer keeps it (no change)
-    local LANIP current_mode def_lan
-    LANIP=$(lan_ip)
-    current_mode="localhost"
-    if [ -f "$HOME/Library/LaunchAgents/local.ollama.lan.plist" ] \
-       || { [ -n "$LANIP" ] && curl -sf --max-time 2 "http://${LANIP}:11434/api/version" >/dev/null 2>&1; }; then
-        current_mode="LAN"
-    fi
-    def_lan="n"; [ "$current_mode" = "LAN" ] && def_lan="y"
-    ok "Currently active exposure: ${current_mode} — Enter keeps it unchanged."
-    if [ -n "$LANIP" ] && ask_def "Expose Ollama to the local network (${LANIP}, instead of localhost-only)?" "$def_lan"; then
-        case "$LANIP" in
-            192.168.*|10.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) : ;;
-            *) fail "IP ${LANIP} is not a private-range address — refusing to expose. Using localhost."; LANIP="" ;;
-        esac
-    else
-        LANIP=""
-    fi
-
-    if [ -n "$LANIP" ]; then
-        OLLAMA_API="$LANIP"
-        export OLLAMA_HOST="${LANIP}:11434"
-        warn "DHCP caveat: binds ${LANIP} — give this Mac a DHCP reservation in the router."
-        if ollama_server_up; then
-            ok "Ollama already serving on ${LANIP}:11434."
-        elif ask "Install a login service bound to ${LANIP}:11434 (LaunchAgent)?"; then
-            brew services stop ollama >/dev/null 2>&1
-            local PLIST="$HOME/Library/LaunchAgents/local.ollama.lan.plist"
-            cat > "$PLIST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-    <key>Label</key><string>local.ollama.lan</string>
-    <key>ProgramArguments</key><array>
-        <string>$(command -v ollama)</string>
-        <string>serve</string>
-    </array>
-    <key>EnvironmentVariables</key><dict>
-        <key>OLLAMA_HOST</key><string>${LANIP}:11434</string>
-        <key>OLLAMA_CONTEXT_LENGTH</key><string>32768</string>
-    </dict>
-    <key>RunAtLoad</key><true/>
-    <key>KeepAlive</key><true/>
-</dict></plist>
-EOF
-            launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null
-            launchctl bootstrap "gui/$(id -u)" "$PLIST" && ok "LaunchAgent installed and started."
-            sleep 3
-        elif ask "Start Ollama on ${LANIP}:11434 just for this session instead?"; then
-            nohup ollama serve >/dev/null 2>&1 &
-            sleep 3
-        fi
-    else
-        # explicit switch LAN -> localhost: tear the LAN service down first
-        if [ "$current_mode" = "LAN" ]; then
-            warn "Switching LAN -> localhost: removing the LAN LaunchAgent."
-            launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/local.ollama.lan.plist" 2>/dev/null
-            rm -f "$HOME/Library/LaunchAgents/local.ollama.lan.plist"
-            pkill -f "ollama serve" 2>/dev/null; sleep 2
-        fi
-        if ollama_server_up; then
-            ok "Ollama server already running (localhost-only)."
-        elif brew list ollama >/dev/null 2>&1; then
-            if ask "Start Ollama as a background service (brew services, auto-starts on login)?"; then
-                warn "brew services cannot pass env vars — server runs with the 4k default context."
-                warn "For Claude Code use, aiModelLauncher.sh will offer a restart with 32k context."
-                brew services start ollama; sleep 3
-            elif ask "Start Ollama just for this session (with 32k context for Claude Code)?"; then
-                OLLAMA_CONTEXT_LENGTH=32768 nohup ollama serve >/dev/null 2>&1 &
-                sleep 3
-            fi
-        else
-            if ask "Start Ollama for this session?"; then
-                open -a Ollama 2>/dev/null || { nohup ollama serve >/dev/null 2>&1 & }
-                sleep 3
-            fi
-        fi
-    fi
-
-    if ollama_server_up; then
-        ok "Server is up on ${OLLAMA_API}:11434."
-        lsof -iTCP:11434 -sTCP:LISTEN -n -P 2>/dev/null | tail -n +2 | awk '{print "    listening: "$9}' | sort -u
-    else
-        warn "Server not reachable — model steps will be unavailable."
-        return 1
-    fi
+# ---------- Ollama daemon, only so that pulls work -------------------------
+# NOTE: serving is NOT an install concern. Network exposure, context size and
+# keeping a model resident all live in launchInference.sh. This helper only
+# makes sure the daemon is up long enough to download models.
+ollama_ensure_daemon() {
+    ollama_server_up && return 0
+    info "Starting the Ollama daemon (needed to download models)..."
+    nohup ollama serve >/dev/null 2>&1 &
+    sleep 3
+    ollama_server_up || { fail "Could not start the Ollama daemon."; return 1; }
+    ok "Daemon running on ${OLLAMA_API}:11434."
 }
 
 # ---------- step: uv ---------------------------------------------------------
@@ -414,7 +329,7 @@ installAiStackUv() {
         ok "uv present: $(uv --version)"
         if brew list uv >/dev/null 2>&1 && [ -n "$(brew outdated uv 2>/dev/null)" ]; then
             warn "A newer uv is available."
-            ask_def "Upgrade uv now?" "y" && brew upgrade uv
+            ask_def "Upgrade uv now?" "y" && brew upgrade -y uv
         fi
         return 0
     fi
@@ -423,7 +338,7 @@ installAiStackUv() {
     else
         info "uv is required for MLX-LM — installing it."
     fi
-    brew install uv && ok "uv installed." || { fail "uv install failed."; return 1; }
+    brew install -y uv && ok "uv installed." || { fail "uv install failed."; return 1; }
 }
 
 # ---------- step: mlx-lm -----------------------------------------------------
@@ -435,7 +350,7 @@ installAiStackLlamacppEngine() {
         ok "llama.cpp present: $(llama-cli --version 2>&1 | head -1)"
         if brew list llama.cpp >/dev/null 2>&1 && [ -n "$(brew outdated llama.cpp 2>/dev/null)" ]; then
             warn "A newer llama.cpp is available."
-            ask_def "Upgrade llama.cpp now?" "y" && brew upgrade llama.cpp
+            ask_def "Upgrade llama.cpp now?" "y" && brew upgrade -y llama.cpp
         else
             ok "Already the latest version."
         fi
@@ -444,7 +359,7 @@ installAiStackLlamacppEngine() {
     echo "    The only engine here that reaches the Q5_K_M / Q6_K quants —"
     echo "    Ollama's registry stops at q4_K_M and q8_0."
     if ask_def "Install llama.cpp via Homebrew?" "y"; then
-        brew install llama.cpp && ok "llama.cpp installed." || { fail "brew install llama.cpp failed."; return 1; }
+        brew install -y llama.cpp && ok "llama.cpp installed." || { fail "brew install -y llama.cpp failed."; return 1; }
     else
         warn "Skipping llama.cpp."
     fi
@@ -481,7 +396,7 @@ installAiStackMlxmlEngine() {
 
 # ---------- step: Claude Code CLI --------------------------------------------
 installAiStackClaudeCli() {
-    info "installAiStackClaudeCli — Claude Code CLI (frontend for aiModelLauncher.sh)"
+    info "installAiStackClaudeCli — Claude Code CLI (frontend used by launchInference.sh)"
     if command -v claude >/dev/null 2>&1; then
         # rerun path: version check is AUTOMATIC (works for npm and native
         # installs alike); the update question appears only when needed,
@@ -510,7 +425,7 @@ installAiStackClaudeCli() {
     fi
 
     # first-run path: not installed — propose installation
-    warn "claude CLI not installed — aiModelLauncher's Claude step needs it."
+    warn "claude CLI not installed — launchInference.sh needs it for Claude sessions."
     if command -v npm >/dev/null 2>&1; then
         if ask_def "Install Claude Code now (npm install -g @anthropic-ai/claude-code)?" "y"; then
             npm install -g @anthropic-ai/claude-code \
@@ -836,7 +751,7 @@ installAiStackOllamaModels() {
         warn "Ollama is not installed — skipping its model list."
         return 0
     fi
-    ollama_server_up || { fail "Ollama is installed but its server is not running (run installAiStackOllamaServer)."; return 1; }
+    ollama_ensure_daemon || return 1
     # clean leftovers of interrupted/failed pulls first, so free-space is honest
     ollama_prune_orphan_blobs ask
     aiStackModelMenu "Ollama" ollamaListInstalled ollamaPullModel
@@ -908,7 +823,6 @@ installAiStack() {
     fi
     ok "Engines available: ${engines}"
 
-    installAiStackOllamaServer      || warn "Continuing without a running Ollama server."
     installAiStackClaudeCli
 
     # --- model layer: same order as the engines, each skipped if absent ------
