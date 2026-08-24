@@ -589,12 +589,14 @@ launchInferenceKillPrevious() {
 }
 
 # ---------- 5. free resources -------------------------------------------------
-# Walk every open desktop app, biggest memory first, offering to close each.
-# Enumerated live, so nothing is hardcoded. Enter means NO, and the app hosting
-# this session is skipped by walking the parent-process chain — otherwise the
-# script could close the terminal it is running in. Finder and engines skipped.
+# Walk every open desktop app over FREE_MIN_MB (default 100), biggest first,
+# offering to close each. Enter means NO, and the app hosting this session is
+# skipped by walking the parent-process chain — otherwise the script could close
+# the terminal it runs in. Also skipped: Finder, the engines, and the monitoring
+# tools, which exist to watch this very run.
 launchInferenceFreeResources() {
-    info "Scanning open desktop applications..."
+    local FREE_MIN_MB="${FREE_MIN_MB:-100}"
+    info "Scanning open desktop applications (over ${FREE_MIN_MB} MB)..."
     local ancestors="" anc=$$
     while [ -n "$anc" ] && [ "$anc" -gt 1 ] 2>/dev/null; do
         ancestors="$ancestors $anc"
@@ -611,23 +613,35 @@ launchInferenceFreeResources() {
     end tell' 2>/dev/null)
     [ -z "$apps" ] && { warn "Could not enumerate desktop apps — skipping."; return 0; }
 
-    local rows="" pid name mem_mb
+    local rows="" pid name mem_mb lower hidden_small=0 hidden_stack=0
     while IFS=$'\t' read -r pid name; do
         [ -z "$pid" ] && continue
         case " $ancestors " in *" $pid "*)
             warn "\"$name\" hosts this session — skipping."; continue ;;
         esac
-        case "$name" in
-            Finder) continue ;;
-            [Oo]llama*|*llama-server*|*mlx*) continue ;;
+        lower=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
+        case "$lower" in
+            finder) continue ;;
+            # the stack itself: engines, and the monitoring tools that exist to
+            # watch this very run — closing them would defeat the purpose
+            ollama*|*llama-server*|*mlx*|anubis*|macmon*|litellm*)
+                hidden_stack=$((hidden_stack+1)); continue ;;
         esac
         mem_mb=$(ps -axo rss=,command= | awk -v app="$(echo "$name" | tr '[:upper:]' '[:lower:]').app/" '
             index(tolower($0), app) {s+=$1} END {printf "%d", s/1024}')
         [ "$mem_mb" -eq 0 ] && mem_mb=$(ps -o rss= -p "$pid" 2>/dev/null | awk '{printf "%d", $1/1024}')
         [ -z "$mem_mb" ] && mem_mb=0
+        # closing a 50 MB app frees nothing a model would notice; asking about
+        # it is pure keystroke tax
+        if [ "$mem_mb" -lt "$FREE_MIN_MB" ]; then
+            hidden_small=$((hidden_small+1)); continue
+        fi
         rows="${rows}${mem_mb}|${pid}|${name}
 "
     done <<< "$apps"
+
+    [ "$hidden_stack" -gt 0 ] && ok "Skipped ${hidden_stack} of this stack's own processes (engines, monitoring)."
+    [ "$hidden_small" -gt 0 ] && ok "Skipped ${hidden_small} app(s) under ${FREE_MIN_MB} MB — too small to matter."
     [ -z "$rows" ] && { ok "No closable desktop apps found."; return 0; }
 
     local mem pid2 name2
