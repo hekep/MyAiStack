@@ -24,7 +24,7 @@ Debian box.
 
 | Script | Doc | One-liner |
 |---|---|---|
-| [install.sh](../install.sh) | [install.sh.md](install.sh.md) | Function-per-step, re-runnable installer (`installAiStack*` + `installAiStack` wrapper): Homebrew → Ollama (.app→brew migration, upgrade proposals) → server with localhost/LAN choice → uv → mlx-lm → RAM-aware model menu (biggest→smallest, loops until N) → verification. Hard disk gate. |
+| [install.sh](../install.sh) | [install.sh.md](install.sh.md) | Multi-engine, re-runnable installer (`installAiStack*` + `installAiStack` wrapper): disk gate → **three engines** (llama.cpp default-yes, MLX-LM and Ollama optional; wizard cancels if none) → Ollama server / Claude CLI → a RAM-aware model menu **per installed engine**, each from its own catalog → verification. |
 | [uninstall.sh](../uninstall.sh) | [uninstall.sh.md](uninstall.sh.md) | Function-per-layer remover (`uninstallAiStack*` + `uninstallAiStack` wrapper), mirror of the installer in reverse-dependency order: models (numbered menu, **gate**) → mlx-lm → Claude CLI → Ollama → `~/.ollama` (double-confirmed) → uv. Nothing below the models is removed while any model remains. Homebrew untouched. |
 | [noRole.sh](../noRole.sh) | — | Unified purge dispatcher: discovers the `no<Role>Role.sh` scripts in the OS folder. `./noRole.sh Docker` (case-insensitive) launches one directly; with no argument it offers each available role as a y/N question (default No). |
 | [MacOs/noDockerRole.sh](../MacOs/noDockerRole.sh) | [noDockerRole.sh.md](noDockerRole.sh.md) | "Reg cleaner" purge of Docker Desktop — app, 33 GB VM disk, root daemons, symlinks, traces, keychain — protecting `~/MyDocker*`. Reports GB gained per step. Run via `./noRole.sh Docker`. |

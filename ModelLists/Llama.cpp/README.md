@@ -1,16 +1,45 @@
-# Llama.cpp model lists — planned
+# Llama.cpp model lists
 
-No catalogs yet. When llama.cpp support is added, drop
-`<RAM>_GB_Ram.json` files here using the schema in [../README.md](../README.md)
-and run the installer with `MODEL_LIST_ENGINE=Llama.cpp`.
+Catalogs for the **llama.cpp** engine (`brew install llama.cpp`), loaded by
+`installAiStackLlamacppModels` via `MODEL_LIST_ENGINE=Llama.cpp`.
 
-Engine-specific notes for whoever fills this in:
+Tiers provided: `24`, `32`, `48`, `64` GB. Hosts with more RAM load the 64 GB
+list until verified larger entries (70B+ GGUF) are added.
 
-- `tag` should be whatever llama.cpp is driven with — most naturally a
-  HuggingFace GGUF reference (`repo:quant`, e.g.
-  `bartowski/Qwen_Qwen3.6-35B-A3B-GGUF:Q6_K`) or a local `.gguf` path.
-- This engine is the reason to have the folder at all: llama.cpp reaches the
-  quantizations Ollama's registry does not carry (Q5_K_M, Q6_K, IQ variants),
-  which is exactly what blocked us on the Ollama side.
-- `size_gb` must still be the real file size, and the tier ceiling rule
-  (`size_gb * 1.3 + 2 ≤ ram_gb - 5`) still applies.
+## Tag format
+
+```
+<hf-repo>:<QUANT>      e.g. bartowski/Qwen_Qwen3.6-35B-A3B-GGUF:Q6_K
+```
+
+The same form llama.cpp's own `-hf` flag takes. `size_gb` is the exact GGUF
+file size from the HuggingFace tree API.
+
+## Why this engine matters
+
+It is the **only** engine here that reaches the mid quants: the Ollama registry
+carries q4_K_M and q8_0, nothing between, and direct `hf.co/*` pulls through
+Ollama fail on 0.32. llama.cpp downloads plain GGUF files, so `Q5_K_M` and
+`Q6_K` — the quality sweet spot on a 48 GB machine — become available.
+
+## How downloads work
+
+`llamacppPullModel` resolves the real filename from the repo tree first (naming
+differs between uploaders: `Qwen_Qwen3.6-35B-A3B-Q6_K.gguf` vs
+`Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf`), then fetches it with
+`curl -L -C -` — **resumable**, unlike the Ollama HF path. Files land in
+`$LLAMACPP_MODEL_DIR` (default `~/Models/llama.cpp`) named
+`org__repo@QUANT.gguf`, an encoding the installer reverses to detect what is
+already present.
+
+Run a downloaded model with:
+
+```bash
+llama-server -m ~/Models/llama.cpp/<file>.gguf -c 32768
+```
+
+## Editing
+
+Follow the rules in [../README.md](../README.md): verify the repo and the quant
+file exist, take `size_gb` from the tree API, and respect the tier ceiling
+(`size_gb * 1.3 + 2 ≤ ram_gb - 5`).

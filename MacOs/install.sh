@@ -10,16 +10,22 @@
 # Steps carrying "Ollama" in the name are engine-specific; the others apply to
 # the stack as a whole (and stay put when other engines are added).
 #
-#   installAiStackSanity         platform + host RAM detection (sets globals)
-#   installAiStackDiskGate       HARD BLOCK until enough free disk
-#   installAiStackHomebrew       Homebrew present / updated
-#   installAiStackOllamaEngine   Ollama itself (.app -> brew migration, upgrade)
-#   installAiStackOllamaServer   server running; localhost-only or LAN binding
-#   installAiStackUv             uv (needed by mlx-lm)
-#   installAiStackMlx            mlx-lm (Apple-native inference)
-#   installAiStackClaudeCli      Claude Code CLI (the agent frontend)
-#   installAiStackOllamaModels   RAM-aware Ollama model menu: pick & pull until "N"
-#   installAiStackVerification   status summary
+#   installAiStackSanity          platform + host RAM detection (sets globals)
+#   installAiStackDiskGate        HARD BLOCK until enough free disk
+#   installAiStackHomebrew        Homebrew present / updated
+#   --- engines (at least one required; the wizard stops if none) ---
+#   installAiStackLlamacppEngine  llama.cpp   — default YES; reaches Q5_K_M/Q6_K
+#   installAiStackMlxmlEngine     MLX-LM      — default no; Apple-native, 6-bit
+#   installAiStackOllamaEngine    Ollama      — default no; managed daemon + API
+#   --- shared ---
+#   installAiStackUv              uv (pulled in automatically by MLX-LM)
+#   installAiStackOllamaServer    Ollama server; localhost-only or LAN binding
+#   installAiStackClaudeCli       Claude Code CLI (the agent frontend)
+#   --- models, one step per engine, same order, each skipped if absent ---
+#   installAiStackLlamacppModels  GGUF files -> ~/Models/llama.cpp
+#   installAiStackMlxmlModels     HF repos   -> HuggingFace cache
+#   installAiStackOllamaModels    registry tags -> ~/.ollama
+#   installAiStackVerification    status summary
 #   installAiStack               wrapper — runs all of the above in order
 #
 # Usage:
@@ -70,9 +76,11 @@ ask_def() {
 free_gb() { df -g /System/Volumes/Data | awk 'NR==2 {print $4}'; }
 
 # ---------- registry tag availability (cached 24 h) --------------------------
-# The Ollama registry has no single list-everything endpoint, so this does the
-# next-best thing: one tiny manifest probe per candidate tag, all in parallel,
-# cached for a day — first run ~2 s, reruns instant.
+# Neither the Ollama registry nor HuggingFace has a list-everything endpoint,
+# so this does the next-best thing: one tiny existence probe per candidate tag,
+# all in parallel, cached for a day — first run ~2 s, reruns instant. A tag
+# containing "/" is a HuggingFace repo (llama.cpp GGUF, MLX); otherwise it is
+# an Ollama registry tag.
 TAG_CACHE_DIR="$HOME/.cache/ollama-tag-check"
 tag_cache_file() { echo "$TAG_CACHE_DIR/$(echo "$1" | tr ':/' '__')"; }
 tag_check_prefetch() {   # probe one tag and cache the HTTP status
@@ -81,8 +89,8 @@ tag_check_prefetch() {   # probe one tag and cache the HTTP status
     mkdir -p "$TAG_CACHE_DIR"
     [ -f "$f" ] && [ -n "$(find "$f" -mmin -1440 2>/dev/null)" ] && return 0
     case "$name" in
-        hf.co/*) url="https://huggingface.co/api/models/${name#hf.co/}" ;;  # GGUF repo on HuggingFace
-        *)       url="https://registry.ollama.ai/v2/library/${name}/manifests/${t}" ;;
+        */*) url="https://huggingface.co/api/models/${name#hf.co/}" ;;   # HF repo: llama.cpp GGUF or MLX
+        *)   url="https://registry.ollama.ai/v2/library/${name}/manifests/${t}" ;;
     esac
     code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$url" 2>/dev/null)
     echo "${code:-000}" > "$f"
@@ -141,6 +149,20 @@ ollama_server_up() { curl -sf "http://${OLLAMA_API}:11434/api/version" >/dev/nul
 lan_ip() { ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null; }
 
 model_installed() { ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$1"; }
+
+# ---------- engine detection --------------------------------------------------
+llamacpp_installed() { command -v llama-cli >/dev/null 2>&1 || command -v llama-server >/dev/null 2>&1; }
+mlxml_installed()    { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^mlx-lm'; }
+ollama_installed()   { command -v ollama >/dev/null 2>&1; }
+
+# space-separated list of engines present, empty when none
+installed_engines() {
+    local e=""
+    llamacpp_installed && e="${e} llama.cpp"
+    mlxml_installed    && e="${e} MLX-LM"
+    ollama_installed   && e="${e} Ollama"
+    echo "${e# }"
+}
 
 require_disk() {
     local need=$1 what=$2 have
@@ -274,7 +296,10 @@ installAiStackOllamaEngine() {
     fi
 
     warn "Ollama not installed."
-    ask "Install Ollama via Homebrew?" || { warn "Skipping — model steps will be unavailable."; return 0; }
+    echo "    Optional — llama.cpp or MLX-LM can serve models instead. Ollama's"
+    echo "    advantages: a managed daemon, an Anthropic-compatible API for Claude"
+    echo "    CLI, and one-command pulls; its quant ladder is the narrowest."
+    ask_def "Install Ollama via Homebrew?" "n" || { warn "Skipping Ollama."; return 0; }
     brew install ollama || { fail "brew install ollama failed."; return 1; }
     ok "Installed: $(ollama --version 2>/dev/null)"
 }
@@ -282,7 +307,10 @@ installAiStackOllamaEngine() {
 # ---------- step: server + network exposure ----------------------------------
 installAiStackOllamaServer() {
     info "installAiStackOllamaServer — server process and network binding"
-    command -v ollama >/dev/null 2>&1 || { fail "Prerequisite missing: ollama binary (run installAiStackOllamaEngine)."; return 1; }
+    if ! ollama_installed; then
+        warn "Ollama is not installed — no server to start."
+        return 0
+    fi
 
     echo "    Network exposure options:"
     echo "      localhost — API on 127.0.0.1 only; nothing else can connect (default, safest)"
@@ -377,43 +405,78 @@ EOF
 }
 
 # ---------- step: uv ---------------------------------------------------------
+# installAiStackUv [required]
+# "required" installs without asking — used when another step depends on it.
 installAiStackUv() {
-    info "installAiStackUv — Python tool manager (needed by mlx-lm)"
+    info "installAiStackUv — Python tool manager (needed by MLX-LM)"
     command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew."; return 1; }
     if command -v uv >/dev/null 2>&1; then
         ok "uv present: $(uv --version)"
         if brew list uv >/dev/null 2>&1 && [ -n "$(brew outdated uv 2>/dev/null)" ]; then
             warn "A newer uv is available."
-            ask "Upgrade uv now?" && brew upgrade uv
+            ask_def "Upgrade uv now?" "y" && brew upgrade uv
         fi
         return 0
     fi
-    ask "Install uv via Homebrew?" || { warn "Skipping — mlx-lm will be unavailable."; return 1; }
+    if [ "${1:-}" != "required" ]; then
+        ask_def "Install uv via Homebrew?" "y" || { warn "Skipping — MLX-LM will be unavailable."; return 1; }
+    else
+        info "uv is required for MLX-LM — installing it."
+    fi
     brew install uv && ok "uv installed." || { fail "uv install failed."; return 1; }
 }
 
 # ---------- step: mlx-lm -----------------------------------------------------
-installAiStackMlx() {
-    info "installAiStackMlx — Apple-native inference (fastest path on this chip)"
-    command -v uv >/dev/null 2>&1 || { fail "Prerequisite missing: uv (run installAiStackUv)."; return 1; }
-    if uv tool list 2>/dev/null | grep -q '^mlx-lm'; then
-        # installed: check for updates automatically, ask only if one exists
+# ---------- engine step: llama.cpp (asked first, default YES) ----------------
+installAiStackLlamacppEngine() {
+    info "installAiStackLlamacppEngine — llama.cpp (GGUF engine)"
+    command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew."; return 1; }
+    if llamacpp_installed; then
+        ok "llama.cpp present: $(llama-cli --version 2>&1 | head -1)"
+        if brew list llama.cpp >/dev/null 2>&1 && [ -n "$(brew outdated llama.cpp 2>/dev/null)" ]; then
+            warn "A newer llama.cpp is available."
+            ask_def "Upgrade llama.cpp now?" "y" && brew upgrade llama.cpp
+        else
+            ok "Already the latest version."
+        fi
+        return 0
+    fi
+    echo "    The only engine here that reaches the Q5_K_M / Q6_K quants —"
+    echo "    Ollama's registry stops at q4_K_M and q8_0."
+    if ask_def "Install llama.cpp via Homebrew?" "y"; then
+        brew install llama.cpp && ok "llama.cpp installed." || { fail "brew install llama.cpp failed."; return 1; }
+    else
+        warn "Skipping llama.cpp."
+    fi
+}
+
+# ---------- engine step: MLX-LM (optional, default NO) -----------------------
+installAiStackMlxmlEngine() {
+    info "installAiStackMlxmlEngine — MLX-LM (Apple-native engine)"
+    if mlxml_installed; then
+        # installed: check PyPI automatically, ask only if an update exists
         local cur latest
         cur=$(uv tool list 2>/dev/null | awk '/^mlx-lm /{print $2}' | tr -d 'v')
         latest=$(curl -sf --max-time 10 https://pypi.org/pypi/mlx-lm/json 2>/dev/null \
                  | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])' 2>/dev/null)
         if [ -n "$latest" ] && [ -n "$cur" ] && [ "$latest" != "$cur" ]; then
             warn "mlx-lm update available: ${cur} -> ${latest}"
-            ask_def "Update mlx-lm now?" "y" && uv tool upgrade mlx-lm
+            ask_def "Update MLX-LM now?" "y" && uv tool upgrade mlx-lm
         elif [ -z "$latest" ]; then
-            ok "mlx-lm ${cur:-?} installed (update check skipped — PyPI unreachable)."
+            ok "MLX-LM ${cur:-?} installed (update check skipped — PyPI unreachable)."
         else
-            ok "mlx-lm ${cur} is up to date."
+            ok "MLX-LM ${cur} is up to date."
         fi
         return 0
     fi
-    ask "Install mlx-lm?" || { warn "Skipping mlx-lm."; return 0; }
-    uv tool install mlx-lm && ok "mlx-lm installed." || fail "mlx-lm install failed."
+    echo "    Apple's own array framework — usually the fastest inference on this chip,"
+    echo "    and it reaches 6-bit builds. Needs uv (installed automatically if accepted)."
+    if ! ask_def "Install MLX-LM?" "n"; then
+        warn "Skipping MLX-LM."
+        return 0
+    fi
+    installAiStackUv required || { fail "MLX-LM needs uv — not installed."; return 1; }
+    uv tool install mlx-lm && ok "MLX-LM installed." || { fail "mlx-lm install failed."; return 1; }
 }
 
 # ---------- step: Claude Code CLI --------------------------------------------
@@ -466,7 +529,7 @@ installAiStackClaudeCli() {
 # The catalog is DATA, not code: ModelLists/<Engine>/<RAM>_GB_Ram.json holds a
 # curated top-20 of code-generation models per RAM tier, biggest first, with
 # real download sizes read from the registry manifests. loadModelCatalog picks
-# the file matching this host and fills OLLAMA_MODEL_CATALOG with
+# the file matching this host and fills AI_MODEL_CATALOG with
 # "tag|size_gb|description" lines.
 #
 # The menu then filters further: fits the CURRENT GPU limit (need = size*1.3+2),
@@ -479,7 +542,7 @@ installAiStackClaudeCli() {
 # registry offers q4_K_M and q8_0.
 
 MODEL_LIST_ENGINE="${MODEL_LIST_ENGINE:-Ollama}"     # Llama.cpp / MLX-LM later
-OLLAMA_MODEL_CATALOG=()
+AI_MODEL_CATALOG=()
 
 # repo root = parent of the OS folder holding this script
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
@@ -517,7 +580,7 @@ PYEOF
     fi
 }
 
-# loadModelCatalog [host_ram_gb] — fill OLLAMA_MODEL_CATALOG from the JSON list
+# loadModelCatalog [host_ram_gb] — fill AI_MODEL_CATALOG from the JSON list
 loadModelCatalog() {
     local ram="${1:-${TOTAL_GB:-0}}" file line
     [ "$ram" -gt 0 ] 2>/dev/null || ram=$(( $(sysctl -n hw.memsize) / 1073741824 ))
@@ -525,174 +588,299 @@ loadModelCatalog() {
         fail "No model lists found in ModelLists/${MODEL_LIST_ENGINE}/ — cannot offer models."
         return 1
     }
-    OLLAMA_MODEL_CATALOG=()
+    AI_MODEL_CATALOG=()
     while IFS= read -r line; do
-        [ -n "$line" ] && OLLAMA_MODEL_CATALOG+=("$line")
+        [ -n "$line" ] && AI_MODEL_CATALOG+=("$line")
     done < <(parseModelJson "$file")
-    if [ "${#OLLAMA_MODEL_CATALOG[@]}" -eq 0 ]; then
+    if [ "${#AI_MODEL_CATALOG[@]}" -eq 0 ]; then
         fail "Could not parse $(basename "$file") — no models loaded."
         return 1
     fi
-    ok "Model list: ${MODEL_LIST_ENGINE}/$(basename "$file") — ${#OLLAMA_MODEL_CATALOG[@]} models (host RAM ${ram} GB)."
+    ok "Model list: ${MODEL_LIST_ENGINE}/$(basename "$file") — ${#AI_MODEL_CATALOG[@]} models (host RAM ${ram} GB)."
 }
 
-installAiStackOllamaModels() {
-    info "installAiStackOllamaModels — Ollama models suited to this host (${TOTAL_GB:-?} GB RAM)"
-    # Ollama models are only relevant when Ollama itself is installed. Not an
-    # error: other engines (Llama.cpp, MLX-LM) may be the ones in use.
-    if ! command -v ollama >/dev/null 2>&1; then
-        warn "Ollama is not installed — skipping the Ollama model list."
+# ---------- per-engine adapters ----------------------------------------------
+# Each engine supplies two functions: one that lists what is already installed
+# (one tag per line) and one that downloads a tag. aiStackModelMenu does the
+# rest, identically for every engine.
+
+# --- Ollama: pulls into ~/.ollama via the daemon ------------------------------
+ollamaListInstalled() { ollama list 2>/dev/null | awk 'NR>1 {print $1}'; }
+
+ollamaPullModel() {
+    local tag="$1" pull_log attempt ok_pull=0 last_err=""
+    info "Pulling ${tag}..."
+    pull_log=$(mktemp "${TMPDIR:-/tmp}/ollama-pull.XXXXXX")
+    for attempt in 1 2 3; do
+        ollama pull "$tag" 2>&1 | tee "$pull_log"
+        if [ "${PIPESTATUS[0]}" -eq 0 ]; then ok_pull=1; break; fi
+        last_err=$(grep -i "error" "$pull_log" | tail -1)
+        # transient errors (timeouts, resets): retry — the download RESUMES
+        if [ "$attempt" -lt 3 ] && grep -qiE "deadline exceeded|timeout|connection reset|unexpected EOF|TLS handshake|502|503" "$pull_log"; then
+            warn "Transient error: ${last_err}"
+            warn "Retrying (attempt $((attempt+1))/3) — resumes from already-downloaded data..."
+            sleep 5
+        else
+            break
+        fi
+    done
+    if [ "$ok_pull" -eq 1 ]; then
+        ok "${tag} downloaded."
+    else
+        fail "Pull failed after ${attempt} attempt(s). Actual error:"
+        fail "  ${last_err:-unknown (see output above)}"
+        if grep -qiE "deadline exceeded|timeout|connection reset|unexpected EOF" "$pull_log"; then
+            warn "Keeping downloaded data so a re-try resumes. (Cleanup runs on next step entry if you abandon it.)"
+        else
+            warn "Permanent-looking error (bad tag/manifest) — cleaning up its disk space."
+            ollama_prune_orphan_blobs
+        fi
+    fi
+    rm -f "$pull_log"
+    [ "$ok_pull" -eq 1 ]
+}
+
+# --- llama.cpp: plain GGUF files, downloaded with resumable curl --------------
+LLAMACPP_MODEL_DIR="${LLAMACPP_MODEL_DIR:-$HOME/Models/llama.cpp}"
+
+# tag "org/repo:QUANT" <-> local file "org__repo@QUANT.gguf"
+llamacppLocalFile() {
+    echo "${LLAMACPP_MODEL_DIR}/$(printf '%s' "$1" | sed 's|/|__|g; s|:|@|').gguf"
+}
+llamacppListInstalled() {
+    [ -d "$LLAMACPP_MODEL_DIR" ] || return 0
+    local f b
+    for f in "$LLAMACPP_MODEL_DIR"/*.gguf; do
+        [ -e "$f" ] || continue
+        b=$(basename "$f" .gguf)
+        printf '%s\n' "$(printf '%s' "$b" | sed 's|@|:|; s|__|/|g')"
+    done
+}
+llamacppPullModel() {
+    local tag="$1" repo="${tag%:*}" quant="${tag##*:}" out file url
+    out=$(llamacppLocalFile "$tag")
+    mkdir -p "$LLAMACPP_MODEL_DIR"
+
+    # resolve the real filename from the repo — uploaders name files differently
+    info "Resolving the ${quant} GGUF in ${repo}..."
+    file=$(curl -sf --max-time 25 "https://huggingface.co/api/models/${repo}/tree/main" 2>/dev/null \
+        | python3 -c "
+import json, sys
+q = sys.argv[1]
+try:
+    t = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+for e in t:
+    p = e.get('path', '')
+    if e.get('type') != 'directory' and p.endswith('-%s.gguf' % q):
+        print(p); break
+" "$quant" 2>/dev/null)
+    if [ -z "$file" ]; then
+        fail "No ${quant} GGUF found in ${repo} — skipping."
+        return 1
+    fi
+    url="https://huggingface.co/${repo}/resolve/main/${file}"
+    info "Downloading ${file}"
+    echo "    -> ${out}"
+    echo "    (resumable: if this is interrupted, re-select the model to continue)"
+    if curl -L --fail --progress-bar -C - -o "$out" "$url"; then
+        ok "${tag} downloaded ($(du -h "$out" 2>/dev/null | cut -f1))."
         return 0
     fi
-    ollama_server_up || { fail "Ollama is installed but its server is not running (run installAiStackOllamaServer)."; return 1; }
-    [ -z "${TOTAL_GB:-}" ] && TOTAL_GB=$(( $(sysctl -n hw.memsize) / 1073741824 ))
+    fail "Download failed — the partial file is kept so a retry resumes:"
+    fail "  ${out}"
+    return 1
+}
 
-    # catalog comes from ModelLists/<Engine>/<RAM>_GB_Ram.json
+# --- MLX-LM: HuggingFace repos in the standard HF cache ----------------------
+MLX_HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}/hub"
+
+mlxmlListInstalled() {
+    [ -d "$MLX_HF_CACHE" ] || return 0
+    local d b
+    for d in "$MLX_HF_CACHE"/models--*; do
+        [ -d "$d" ] || continue
+        b=$(basename "$d")
+        printf '%s\n' "$(printf '%s' "${b#models--}" | sed 's|--|/|')"
+    done
+}
+mlxmlPullModel() {
+    local tag="$1"
+    command -v uv >/dev/null 2>&1 || { fail "uv is required to download MLX models."; return 1; }
+    info "Downloading ${tag} into the HuggingFace cache (resumable)..."
+    if uv run --quiet --with huggingface-hub python3 - "$tag" <<'PYEOF'
+import sys
+from huggingface_hub import snapshot_download
+print(snapshot_download(sys.argv[1]))
+PYEOF
+    then
+        ok "${tag} downloaded."
+        return 0
+    fi
+    fail "Download failed for ${tag} (already-fetched shards are kept for resume)."
+    return 1
+}
+
+# ---------- generic model menu, shared by every engine -----------------------
+# aiStackModelMenu <EngineFolder> <list-installed-fn> <pull-fn>
+# Filters: fits the current GPU limit, fits free disk, not already installed,
+# tag verified to exist upstream. Biggest first, loops until "N".
+aiStackModelMenu() {
+    local engine="$1" list_fn="$2" pull_fn="$3"
+
+    [ -z "${TOTAL_GB:-}" ] && TOTAL_GB=$(( $(sysctl -n hw.memsize) / 1073741824 ))
+    MODEL_LIST_ENGINE="$engine"
     loadModelCatalog "$TOTAL_GB" || return 1
 
-    # fit against the CURRENT GPU limit: a raised iogpu.wired_limit_mb widens
-    # the menu (bigger models / higher quants become selectable)
+    # fit against the CURRENT GPU limit: raising iogpu.wired_limit_mb widens the menu
     local cur_limit_mb
     cur_limit_mb=$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)
     if [ "$cur_limit_mb" -gt 0 ]; then
+        ok "Using the currently set GPU limit: $(( cur_limit_mb / 1024 )) GB (iogpu.wired_limit_mb=${cur_limit_mb})."
         GPU_GB=$(( cur_limit_mb / 1024 ))
-        ok "Using the currently set GPU limit: ${GPU_GB} GB (iogpu.wired_limit_mb=${cur_limit_mb})."
     else
         GPU_GB=$(( TOTAL_GB * 3 / 4 ))
         echo "    GPU limit is macOS default (~${GPU_GB} GB). Raising it unlocks bigger quants:"
-        echo "      sudo sysctl iogpu.wired_limit_mb=$(( (TOTAL_GB - 5) * 1024 ))   # then re-run this step"
+        echo "      sudo sysctl iogpu.wired_limit_mb=$(( (TOTAL_GB - 5) * 1024 ))"
     fi
 
-    # clean leftovers of interrupted/failed pulls FIRST, so the free-space
-    # numbers below are honest (skipped automatically if a pull is running;
-    # asks before deleting since leftovers can resume an interrupted pull)
-    ollama_prune_orphan_blobs ask
-
     while true; do
-        # a) what is already downloaded
         local downloaded have_disk
-        downloaded=$(ollama list 2>/dev/null | awk 'NR>1 {print $1}')
+        downloaded=$("$list_fn")
         have_disk=$(free_gb)
         echo
-        echo "    Already downloaded:"
+        echo "    Already installed for ${engine}:"
         [ -n "$downloaded" ] && echo "$downloaded" | sed 's/^/      /' || echo "      (none)"
 
-        # b) candidates: fits GPU allocation AND free disk, not downloaded
         local menu_tags=() menu_lines=() entry tag size desc need hidden_disk=0
-        for entry in "${OLLAMA_MODEL_CATALOG[@]}"; do
+        for entry in "${AI_MODEL_CATALOG[@]}"; do
             IFS='|' read -r tag size desc <<< "$entry"
-            need=$(( size * 13 / 10 + 2 ))                      # weights*1.3 + 2 GB overhead
-            [ "$need" -gt "$GPU_GB" ] && continue               # doesn't fit this host's RAM
-            echo "$downloaded" | grep -qx "$tag" && continue    # already present
-            if [ $(( size + 5 )) -gt "$have_disk" ]; then       # doesn't fit free disk
-                hidden_disk=$((hidden_disk+1))
-                continue
+            need=$(( size * 13 / 10 + 2 ))                    # weights*1.3 + 2 GB overhead
+            [ "$need" -gt "$GPU_GB" ] && continue             # doesn't fit this host's RAM
+            echo "$downloaded" | grep -qxF "$tag" && continue # already present
+            if [ $(( size + 5 )) -gt "$have_disk" ]; then     # doesn't fit free disk
+                hidden_disk=$((hidden_disk+1)); continue
             fi
             menu_tags+=("$tag")
-            menu_lines+=("$(printf '%-28s %3d GB  (needs ~%d GB RAM)  %s' "$tag" "$size" "$need" "$desc")")
+            menu_lines+=("$(printf '%-52s %3d GB  (needs ~%d GB RAM)  %s' "$tag" "$size" "$need" "$desc")")
         done
         [ "$hidden_disk" -gt 0 ] && warn "${hidden_disk} model(s) hidden — larger than the ${have_disk} GB of free disk allows."
+        [ "${#menu_tags[@]}" -eq 0 ] && { ok "No further ${engine} models fit this host — done."; return 0; }
 
-        [ "${#menu_tags[@]}" -eq 0 ] && { ok "No further catalog models fit this host — done."; return 0; }
-
-        # c) availability: probe each candidate tag on the registry in parallel
-        #    (cached 24 h) so the menu never offers a tag that would 404 on pull
-        info "Verifying ${#menu_tags[@]} candidate tags on registry.ollama.ai (parallel, cached 24 h)..."
+        info "Verifying ${#menu_tags[@]} candidate tags upstream (parallel, cached 24 h)..."
         for tag in "${menu_tags[@]}"; do tag_check_prefetch "$tag" & done
         wait
         local avail_tags=() avail_lines=() j
         for j in "${!menu_tags[@]}"; do
             if tag_available "${menu_tags[$j]}"; then
-                avail_tags+=("${menu_tags[$j]}")
-                avail_lines+=("${menu_lines[$j]}")
+                avail_tags+=("${menu_tags[$j]}"); avail_lines+=("${menu_lines[$j]}")
             else
-                warn "Not on the registry (hidden): ${menu_tags[$j]}"
+                warn "Not available upstream (hidden): ${menu_tags[$j]}"
             fi
         done
-        [ "${#avail_tags[@]}" -eq 0 ] && { ok "No available catalog models remain — done."; return 0; }
-        menu_tags=("${avail_tags[@]}")
-        menu_lines=("${avail_lines[@]}")
-        # cap at 25 options
+        [ "${#avail_tags[@]}" -eq 0 ] && { ok "No available ${engine} models remain — done."; return 0; }
+        menu_tags=("${avail_tags[@]}"); menu_lines=("${avail_lines[@]}")
         while [ "${#menu_tags[@]}" -gt 25 ]; do
             unset 'menu_tags[${#menu_tags[@]}-1]' 'menu_lines[${#menu_lines[@]}-1]'
         done
 
         echo
-        echo "${BOLD}Models that fit this machine (~${GPU_GB} GB usable GPU, ${have_disk} GB free disk), biggest first:${RESET}"
+        echo "${BOLD}${engine} models that fit this machine (~${GPU_GB} GB usable GPU, ${have_disk} GB free disk):${RESET}"
         local i
-        for i in "${!menu_tags[@]}"; do
-            printf "  %2d) %s\n" $((i+1)) "${menu_lines[$i]}"
-        done
+        for i in "${!menu_tags[@]}"; do printf "  %2d) %s\n" $((i+1)) "${menu_lines[$i]}"; done
         echo "   N) No download — finish this step"
 
         local sel
-        printf "\n%sSelect a model to download [1-%d / N]:%s " "${BOLD}" "${#menu_tags[@]}" "${RESET}"
+        printf "\n%sSelect a %s model to download [1-%d / N]:%s " "${BOLD}" "$engine" "${#menu_tags[@]}" "${RESET}"
         read -r sel </dev/tty || { echo; fail "No interactive terminal — aborting."; return 1; }
         case "$sel" in
-            [Nn]) ok "Model downloads finished."; return 0 ;;
+            [Nn]) ok "${engine} model downloads finished."; return 0 ;;
             *[!0-9]*|"") echo "Enter a number or N."; continue ;;
         esac
-        [ "$sel" -lt 1 ] || [ "$sel" -gt "${#menu_tags[@]}" ] && { echo "Out of range."; continue; }
+        if [ "$sel" -lt 1 ] || [ "$sel" -gt "${#menu_tags[@]}" ]; then echo "Out of range."; continue; fi
 
         tag="${menu_tags[$((sel-1))]}"
-        IFS='|' read -r _ size _ <<< "$(printf '%s\n' "${OLLAMA_MODEL_CATALOG[@]}" | grep "^${tag}|")"
+        size=$(printf '%s\n' "${AI_MODEL_CATALOG[@]}" | awk -F'|' -v t="$tag" '$1==t {print $2; exit}')
         if require_disk $(( size + 5 )) "${tag} (~${size} GB + headroom)"; then
-            info "Pulling ${tag}..."
-            local pull_log attempt ok_pull=0 last_err=""
-            pull_log=$(mktemp "${TMPDIR:-/tmp}/ollama-pull.XXXXXX")
-            for attempt in 1 2 3; do
-                ollama pull "$tag" 2>&1 | tee "$pull_log"
-                if [ "${PIPESTATUS[0]}" -eq 0 ]; then ok_pull=1; break; fi
-                last_err=$(grep -i "error" "$pull_log" | tail -1)
-                # transient errors (timeouts, resets): retry — the download
-                # RESUMES from the already-fetched data, often at 100%
-                if [ "$attempt" -lt 3 ] && grep -qiE "deadline exceeded|timeout|connection reset|unexpected EOF|TLS handshake|502|503" "$pull_log"; then
-                    warn "Transient error: ${last_err}"
-                    warn "Retrying (attempt $((attempt+1))/3) — resumes from already-downloaded data..."
-                    sleep 5
-                else
-                    break
-                fi
-            done
-            if [ "$ok_pull" -eq 1 ]; then
-                ok "${tag} downloaded."
-            else
-                fail "Pull failed after ${attempt} attempt(s). Actual error:"
-                fail "  ${last_err:-unknown (see output above)}"
-                if grep -qiE "deadline exceeded|timeout|connection reset|unexpected EOF" "$pull_log"; then
-                    # transient failure: KEEP the partial data — re-selecting
-                    # this model resumes instead of restarting from zero
-                    warn "Keeping downloaded data so a re-try resumes. (Cleanup runs on next step entry if you abandon it.)"
-                else
-                    warn "Permanent-looking error (bad tag/manifest) — cleaning up its disk space."
-                    ollama_prune_orphan_blobs
-                fi
-            fi
-            rm -f "$pull_log"
+            "$pull_fn" "$tag" "$size"
         fi
         # loop: menu re-renders without the model just downloaded
     done
 }
 
+# ---------- model steps, one per engine (same order as the engine steps) ------
+installAiStackLlamacppModels() {
+    info "installAiStackLlamacppModels — GGUF models for llama.cpp"
+    if ! llamacpp_installed; then
+        warn "llama.cpp is not installed — skipping its model list."
+        return 0
+    fi
+    echo "    Download directory: ${LLAMACPP_MODEL_DIR}"
+    aiStackModelMenu "Llama.cpp" llamacppListInstalled llamacppPullModel
+}
+
+installAiStackMlxmlModels() {
+    info "installAiStackMlxmlModels — MLX models for MLX-LM"
+    if ! mlxml_installed; then
+        warn "MLX-LM is not installed — skipping its model list."
+        return 0
+    fi
+    echo "    Download cache: ${MLX_HF_CACHE}"
+    aiStackModelMenu "MLX-LM" mlxmlListInstalled mlxmlPullModel
+}
+
+installAiStackOllamaModels() {
+    info "installAiStackOllamaModels — models for Ollama"
+    if ! ollama_installed; then
+        warn "Ollama is not installed — skipping its model list."
+        return 0
+    fi
+    ollama_server_up || { fail "Ollama is installed but its server is not running (run installAiStackOllamaServer)."; return 1; }
+    # clean leftovers of interrupted/failed pulls first, so free-space is honest
+    ollama_prune_orphan_blobs ask
+    aiStackModelMenu "Ollama" ollamaListInstalled ollamaPullModel
+}
+
 # ---------- step: verification -----------------------------------------------
 installAiStackVerification() {
-    info "installAiStackVerification — status and throughput"
+    info "installAiStackVerification — status summary"
     echo
     echo "${BOLD}================= Install summary =================${RESET}"
-    command -v brew   >/dev/null 2>&1 && ok "Homebrew: $(brew --version | head -1)"     || fail "Homebrew: missing"
-    command -v ollama >/dev/null 2>&1 && ok "Ollama:   $(ollama --version 2>/dev/null)" || fail "Ollama: missing"
-    ollama_server_up                  && ok "Server:   running on ${OLLAMA_API}:11434"  || warn "Server: not running"
-    command -v uv     >/dev/null 2>&1 && ok "uv:       $(uv --version)"                  || warn "uv: not installed"
-    uv tool list 2>/dev/null | grep -q '^mlx-lm' \
-                                      && ok "mlx-lm:   installed"                        || warn "mlx-lm: not installed"
-    command -v claude >/dev/null 2>&1 && ok "claude:   $(claude --version 2>/dev/null | head -1)" || warn "claude: not installed"
+    command -v brew >/dev/null 2>&1 && ok "Homebrew:  $(brew --version | head -1)" || fail "Homebrew:  missing"
+    echo "${BOLD}  Engines${RESET}"
+    llamacpp_installed && ok "llama.cpp: $(llama-cli --version 2>&1 | head -1)"    || warn "llama.cpp: not installed"
+    mlxml_installed    && ok "MLX-LM:    $(uv tool list 2>/dev/null | awk '/^mlx-lm /{print $2}')" \
+                       || warn "MLX-LM:    not installed"
+    if ollama_installed; then
+        ok "Ollama:    $(ollama --version 2>/dev/null)"
+        ollama_server_up && ok "  server:  running on ${OLLAMA_API}:11434" || warn "  server:  not running"
+    else
+        warn "Ollama:    not installed"
+    fi
+    echo "${BOLD}  Frontend / tooling${RESET}"
+    command -v claude >/dev/null 2>&1 && ok "claude:    $(claude --version 2>/dev/null | head -1)" || warn "claude:    not installed"
+    command -v uv >/dev/null 2>&1     && ok "uv:        $(uv --version)"                           || warn "uv:        not installed"
 
-    command -v ollama >/dev/null 2>&1 && ollama_server_up || return 0
+    echo "${BOLD}  Models${RESET}"
+    if llamacpp_installed; then
+        local n
+        n=$(llamacppListInstalled | grep -c . || true)
+        echo "    llama.cpp (${LLAMACPP_MODEL_DIR}): ${n:-0}"
+        llamacppListInstalled | sed 's/^/      /'
+    fi
+    if mlxml_installed; then
+        local m
+        m=$(mlxmlListInstalled | grep -c . || true)
+        echo "    MLX-LM / HF cache: ${m:-0}"
+        mlxmlListInstalled | sed 's/^/      /'
+    fi
+    if ollama_installed && ollama_server_up; then
+        echo "    Ollama:"
+        ollama list | sed 's/^/      /'
+    fi
     echo
-    info "Installed models:"
-    ollama list
-    echo
-    echo "    Benchmark models with ./aiModelTest.sh or ./testAllAiModels.sh"
+    echo "    Benchmark Ollama models with ./aiModelTest.sh or ./testAllAiModels.sh"
 }
 
 # ---------- wrapper ----------------------------------------------------------
@@ -703,11 +891,31 @@ installAiStack() {
     installAiStackSanity        || return 1
     installAiStackDiskGate      || return 1
     installAiStackHomebrew      || return 1
-    installAiStackOllamaEngine        || return 1
-    installAiStackOllamaServer        || warn "Continuing without a running server."
-    installAiStackUv            && installAiStackMlx
+
+    # --- engine layer: most-recommended first, each independently optional ---
+    installAiStackLlamacppEngine
+    installAiStackMlxmlEngine
+    installAiStackOllamaEngine
+
+    # GATE: nothing below this line means anything without an engine
+    local engines
+    engines=$(installed_engines)
+    if [ -z "$engines" ]; then
+        echo
+        fail "No inference engine installed — cancelling the rest of the wizard."
+        warn "Re-run and accept at least one of llama.cpp / MLX-LM / Ollama."
+        return 1
+    fi
+    ok "Engines available: ${engines}"
+
+    installAiStackOllamaServer      || warn "Continuing without a running Ollama server."
     installAiStackClaudeCli
+
+    # --- model layer: same order as the engines, each skipped if absent ------
+    installAiStackLlamacppModels
+    installAiStackMlxmlModels
     installAiStackOllamaModels
+
     installAiStackVerification
 }
 

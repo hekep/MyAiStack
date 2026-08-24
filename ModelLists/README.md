@@ -6,17 +6,23 @@ array, so updating the catalog means editing data, never code.
 
 ```
 ModelLists/
-├── Ollama/          24, 32, 48, 64, 128, 256 _GB_Ram.json   (in use)
-├── Llama.cpp/       planned
-└── MLX-LM/          planned
+├── Ollama/          24, 32, 48, 64, 128, 256 _GB_Ram.json
+├── Llama.cpp/       24, 32, 48, 64 _GB_Ram.json
+└── MLX-LM/          24, 32, 48, 64 _GB_Ram.json
 ```
+
+Each engine has its own `README.md` with its tag format and download
+mechanism — the three are **not** interchangeable: Ollama uses registry tags
+(`qwen3.6:35b-a3b`), llama.cpp uses `hf-repo:QUANT`, MLX uses a HuggingFace
+repo whose name embeds the quantization.
 
 ## Which file gets loaded
 
 `loadModelCatalog` (in `<OsFolder>/install.sh`) picks the file for the
 **largest tier ≤ host RAM** — a 96 GB host uses `64_GB_Ram.json`, a 47 GB host
 uses `32_GB_Ram.json`. A host below the smallest tier gets the smallest file.
-The engine folder comes from `MODEL_LIST_ENGINE` (default `Ollama`).
+The engine folder comes from `MODEL_LIST_ENGINE`, which each model step sets
+for itself (`installAiStackLlamacppModels` → `Llama.cpp`, and so on).
 
 ## Schema
 

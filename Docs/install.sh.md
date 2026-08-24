@@ -1,118 +1,111 @@
-# install.sh — Local AI coding stack installer (universal, function-based)
+# install.sh — Local AI coding stack installer (multi-engine, function-based)
 
 ## What it does
 
 Interactive, **re-runnable** installer that builds a local-AI coding
-environment on any Apple Silicon Mac: Homebrew → Ollama → server (localhost or
-LAN binding) → uv → mlx-lm → a **RAM-aware model download menu** →
-verification. It detects the host's memory and only ever offers models that
-actually fit that machine. One y/n question at a time; nothing installs
-silently.
+environment on any Apple Silicon Mac. It offers **three inference engines** —
+llama.cpp, MLX-LM and Ollama — then, for each engine actually installed, a
+RAM-aware menu of code-generation models drawn from that engine's own catalog.
+One question at a time; nothing installs silently.
 
 ## How it works — one function per step
 
 Run the file for the full pipeline, or `source install.sh` and call any
 function alone. Every function checks its own prerequisites, detects work
-already done, and proposes an update when one is available — so both the
-script and each individual function can be run any number of times.
+already done, and proposes an update only when one genuinely exists — so both
+the script and each individual function can be run any number of times.
 
-| Function | What | Gate / re-run behavior |
+Steps carrying an engine name are engine-specific; the rest apply to the whole
+stack.
+
+| Function | What | Default / re-run behavior |
 |---|---|---|
-| `installAiStackSanity` | Platform check + **host RAM detection**; sets `TOTAL_GB` and `GPU_GB` (~75 % of RAM, the macOS GPU allocation) used by the model menu | Aborts under 16 GB RAM or non-Apple-Silicon |
-| `installAiStackDiskGate` | **HARD BLOCK** below 25 GB free (60+ recommended). Shows shortfall + measured disk hogs, loops *Enter = re-check / q = quit*. No bypass. | Passes instantly when already met |
-| `installAiStackHomebrew` | Homebrew present or offered | Skips if present |
-| `installAiStackOllamaEngine` | Ollama runtime. Detects install kind: standalone .app → offers brew migration (models in `~/.ollama` preserved); brew-managed → checks `brew outdated` and **proposes upgrade only if one exists**; missing → offers install | Idempotent |
-| `installAiStackOllamaServer` | Server + **network exposure choice**: localhost-only or LAN-only — binds the Mac's private IP (refuses non-RFC-1918), warns Ollama has **no authentication**, notes the DHCP caveat, installs a dedicated LaunchAgent (`local.ollama.lan.plist`) since `brew services` drops env vars. Prints actual listening sockets from `lsof`. | **Detects what is active now** (LAN LaunchAgent present, or server answering on the LAN IP) and defaults the question to keep it — Enter = no change. An explicit LAN→localhost switch tears the LAN agent down. |
-| `installAiStackUv` | uv (prerequisite of mlx-lm); proposes upgrade if brew reports one | Idempotent |
-| `installAiStackMlx` | mlx-lm via uv | When installed, **checks PyPI automatically** and asks to update only if a newer version actually exists — no question on an up-to-date rerun |
-| `installAiStackClaudeCli` | Claude Code CLI — the frontend aiModelLauncher.sh connects to local models | First run (missing) → proposes installation (default Y). Rerun (present) → **automatic** version check against the npm registry (works for npm *and* native installs); only when a newer version exists does it ask "Update now? [Y/n]" — updating via the matching mechanism (`npm install -g` or `claude update`). |
-| `installAiStackOllamaModels` | **Merged model step — see below** | Loops until "N" |
-| `installAiStackVerification` | Full status summary (versions, server, models) + optional `--verbose` throughput test | Pure read/report |
-| `installAiStack` | **Wrapper** — runs all of the above in order; hard-fails on sanity/disk/brew/engine, degrades gracefully on the rest | — |
+| `installAiStackSanity` | Platform check + **host RAM detection**; sets `TOTAL_GB`/`GPU_GB` | Aborts under 16 GB RAM or non-Apple-Silicon |
+| `installAiStackDiskGate` | **HARD BLOCK** below 25 GB free. Shows shortfall, measured disk hogs, and offers to delete local Time Machine snapshots (which pin freed space). Loops *Enter = re-check / q = quit* | No bypass |
+| `installAiStackHomebrew` | Homebrew | Skips if present |
+| **`installAiStackLlamacppEngine`** | **llama.cpp** — `brew install llama.cpp` | **Default YES.** The only engine that reaches `Q5_K_M`/`Q6_K`. Present → checks `brew outdated`, offers upgrade only if one exists |
+| **`installAiStackMlxmlEngine`** | **MLX-LM** — `uv tool install mlx-lm` | **Default no.** Apple-native, fastest on this chip, publishes 6-bit builds. Pulls in `uv` automatically when accepted. Present → automatic PyPI check, asks only if a newer version exists |
+| **`installAiStackOllamaEngine`** | **Ollama** — brew formula | **Default no.** Managed daemon + Anthropic-compatible API (what Claude CLI talks to), narrowest quant ladder. A standalone `Ollama.app` gets the migrate-to-brew offer; brew-managed gets an upgrade offer only if one exists |
+| `installAiStackUv` | uv | Asked normally; `installAiStackUv required` installs without asking (used by MLX-LM) |
+| `installAiStackOllamaServer` | Ollama server + **network exposure**: localhost-only or LAN-only (private-range IPs only, no authentication warning, DHCP caveat, dedicated LaunchAgent carrying `OLLAMA_CONTEXT_LENGTH=32768`) | Skips entirely if Ollama is absent. Detects the currently active mode and defaults to keeping it |
+| `installAiStackClaudeCli` | Claude Code CLI | Missing → offers install (default Y). Present → automatic version check, asks only if newer exists |
+| **`installAiStackLlamacppModels`** | GGUF files → `~/Models/llama.cpp` | Skipped unless llama.cpp is installed |
+| **`installAiStackMlxmlModels`** | HF repos → HuggingFace cache | Skipped unless MLX-LM is installed |
+| **`installAiStackOllamaModels`** | registry tags → `~/.ollama` | Skipped unless Ollama is installed. Prunes failed-download leftovers first |
+| `installAiStackVerification` | Status summary: every engine, the frontend, and the models installed per engine | Pure read/report |
+| `installAiStack` | **Wrapper** — see order below | — |
 
-## The model menu (`installAiStackOllamaModels`)
+## Order, and the engine gate
 
-Replaces the old fixed "step 7 + step 8" model pulls with a universal,
-hardware-aware chooser:
+```
+sanity → disk gate → Homebrew
+      → llama.cpp engine → MLX-LM engine → Ollama engine      (at least one!)
+      → Ollama server → Claude CLI
+      → llama.cpp models → MLX-LM models → Ollama models
+      → verification
+```
 
-1. **Scans Ollama** for what is already downloaded (`ollama list`).
-2. **Loads the catalog as data**, not code: `loadModelCatalog` picks
-   `ModelLists/<Engine>/<RAM>_GB_Ram.json` for the largest tier ≤ host RAM
-   (48 GB host → `48_GB_Ram.json`; 96 GB → `64_…`; below the smallest tier →
-   smallest file). Engine defaults to `Ollama` via `MODEL_LIST_ENGINE`
-   (Llama.cpp / MLX-LM planned). Each file holds a curated **top-20** of
-   code-generation models, biggest first, with **real download sizes read from
-   the registry manifests**. Schema and editing rules:
-   [ModelLists/README.md](../ModelLists/README.md). Parsed with `python3`,
-   with a `sed` fallback.
-3. Builds a numbered menu from that catalog, showing only models that:
-   - **fit this host** — estimated need (`size × 1.3 + 2 GB` for KV-cache and
-     runtime) must be within the GPU allocation; and
-   - are **not yet downloaded**.
+**If no engine is installed, the wizard cancels** — everything below the engine
+layer is meaningless without one, so the wrapper reports which engines are
+available or stops with `No inference engine installed`. The model steps then
+run in the same order as the engines, each skipping itself if its engine is
+absent.
 
-   The GPU allocation is read from the **currently set**
-   `iogpu.wired_limit_mb` (falling back to the macOS ~75 % default) — raising
-   the limit via the launcher's GPU tuning widens the menu, and the step
-   prints the exact `sysctl` command that unlocks the next tier.
+## The model menu — one implementation, three engines
 
-   **Quantization variants** are separate catalog entries for the main coder
-   models: default `q4_K_M` plus `q8_0` (+~85 % size, effectively lossless)
-   where the registry offers them. Which quants appear is pure fit math
-   against the current GPU limit and free disk.
+`aiStackModelMenu <EngineFolder> <list-installed-fn> <pull-fn>` does the work
+for every engine; each engine supplies only two small adapters (what is
+installed, how to download). The menu:
 
-   **Ollama-registry tags only** — no `hf.co/*` GGUF entries (which would have
-   added Q5_K_M/Q6_K from HuggingFace): direct HF pulls reproducibly failed on
-   Ollama 0.32 with `context deadline exceeded` at the final commit, despite
-   complete blob downloads and working resume. Registry pulls work reliably;
-   the retry logic (3 attempts on transient errors) and resume-aware cleanup
-   remain in place for them. Reaching Q5/Q6 quants is what the planned
-   Llama.cpp engine is for.
-4. **Verifies every candidate tag against the live registry** before offering
-   it (parallel manifest probes to `registry.ollama.ai`, cached 24 h — first
-   run ~2 s, reruns instant; unreachable network = benefit of the doubt).
-   Non-existent tags are hidden with a note, so the menu can never offer a
-   pull that would 404. (The registry has no single list-everything endpoint,
-   so one tiny probe per candidate is the practical equivalent of the "one
-   remote query".)
-5. Menu is capped at **25 options**, ordered **biggest to smallest**, each line
-   showing download size, estimated RAM need, and a one-line description.
-   Last option is always **N) No download**.
-6. After each pull the menu **re-renders** (the just-downloaded model
-   disappears) and the question **loops until "N"** is chosen.
-7. Disk is re-checked (`size + 5 GB` headroom) immediately before every pull.
+1. Loads the catalog as **data**: `ModelLists/<Engine>/<RAM>_GB_Ram.json` for
+   the largest tier ≤ host RAM. Curated top-20 per tier, biggest first, with
+   sizes read from upstream manifests rather than estimated. Schema and rules:
+   [ModelLists/README.md](../ModelLists/README.md).
+2. Filters to models that **fit the current GPU limit** (`size × 1.3 + 2`,
+   read from the live `iogpu.wired_limit_mb`), **fit free disk**, and are **not
+   already installed**.
+3. **Verifies every candidate upstream** before offering it — parallel
+   existence probes, cached 24 h. A tag containing `/` is checked on
+   HuggingFace, otherwise on the Ollama registry. Unavailable tags are hidden,
+   so the menu can never offer a download that 404s.
+4. Renders biggest-first (max 25), with **N** to finish, and **loops** until N.
+   Disk is re-checked immediately before every download.
 
-Example on this 48 GB machine: it loads `Ollama/48_GB_Ram.json`, whose 20
-entries top out at `qwen3-coder:30b-a3b-q8_0` (30 GB → ~41 GB need, so it
-appears only with the GPU limit raised to 43 GB, not at the 36 GB default).
-Already-downloaded models drop out, unavailable tags are hidden, and anything
-too big for the free disk is withheld with a count. A 128 GB Mac would load
-`128_GB_Ram.json` and see the `gpt-oss:120b` / 70B tier instead — the host
-picks its own list, nothing is hardcoded.
+Per-engine download behavior:
+
+- **llama.cpp** — resolves the real GGUF filename from the repo tree (uploaders
+  name files differently), then `curl -L -C -`: **resumable**, which is exactly
+  what the Ollama HF path could not do.
+- **MLX-LM** — `huggingface_hub.snapshot_download` via
+  `uv run --with huggingface-hub`; resumes from fetched shards.
+- **Ollama** — `ollama pull` with 3 retries on transient errors, real error
+  reporting, and resume-aware cleanup of orphaned blobs.
 
 ## Why it is necessary
 
-- **The machine's original Ollama was a 19-month-old standalone .app** that
-  `brew upgrade` couldn't see and that predated modern MoE support; the
-  migration is easy to get wrong by hand (one wrong `rm` deletes the models).
-- **Disk reality:** a single model is ~20 GB and this disk was at 3 GB free
-  when the project started. The hard gate prevents half-downloaded blobs from
-  filling the disk.
+- **One engine is not enough.** Ollama's registry carries only q4_K_M and q8_0
+  for the models that matter here, and its direct HuggingFace pulls fail on
+  0.32 (`context deadline exceeded`, reproduced repeatedly). On a 48 GB Mac the
+  8-bit 35B does not fit and the 4-bit is a visible quality step down — so the
+  useful middle (`Q6_K`, `6bit`) is reachable *only* through llama.cpp or MLX.
+  Hence three engines, with llama.cpp recommended by default.
 - **Hardware-aware menus prevent the classic local-LLM failure**: pulling a
-  model that loads, swaps, and generates at 1 token/s. The fit rule bakes the
-  memory math in before any bytes are downloaded.
-- **Exposure defaults matter:** many tutorials suggest `OLLAMA_HOST=0.0.0.0`,
+  model that loads, swaps, and generates at 1 token/s.
+- **Disk reality**: a single model is 20–30 GB; the hard gate and the
+  per-download re-check keep a half-finished pull from filling the disk.
+- **Exposure defaults matter**: many guides suggest `OLLAMA_HOST=0.0.0.0`,
   which opens an unauthenticated API to every network. Localhost is the
-  default; LAN exposure is an explicit, guarded choice.
+  default; LAN is an explicit, guarded choice.
 
 ## Usage
 
 ```bash
-./install.sh                  # full pipeline
+./install.sh                         # full pipeline
 ```
 
 ```bash
-source install.sh             # à la carte, e.g.:
-installAiStackOllamaModels           # just the model menu
+source install.sh                    # à la carte, e.g.:
+installAiStackLlamacppModels         # just the llama.cpp model menu
 ```
 
 Companions: [uninstall.sh.md](uninstall.sh.md) (reversal),
