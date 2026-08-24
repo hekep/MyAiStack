@@ -16,8 +16,8 @@ three engines.)
 | Function | What | Notes |
 |---|---|---|
 | `launchInferenceEngineSelector` | Lists engines that are installed **and have at least one model downloaded**, with their model counts | An engine with nothing downloaded cannot be launched, so it is never offered — just named once ("installed but no models downloaded"). Asked only when more than one engine qualifies; with exactly one it says so and proceeds. Previous choice is the default |
-| `launchInferenceModelSelector <engine>` | Numbered menu of the models installed **for that engine**, with on-disk sizes | Ollama reads `ollama list`; llama.cpp scans `~/Models/llama.cpp`; MLX-LM scans the HuggingFace cache |
-| `launchInferenceContextSelector <engine> <model>` | **Numeric menu: 32K / 64K / 128K (default) / 256K / 512K / 1024K** | Larger sizes appear **only when they fit**: weights + estimated KV cache + 2 GB must stay inside the GPU budget. For Ollama it also queries `/api/show` for the model's own ceiling and hides anything beyond it |
+| `launchInferenceModelSelector <engine>` | Numbered menu of the models installed **for that engine**, with on-disk sizes | **Not asked when the engine has only one model** — it is announced and used. Ollama reads `ollama list`; llama.cpp scans `~/Models/llama.cpp`; MLX-LM scans the HuggingFace cache |
+| `launchInferenceContextSelector <engine> <model>` | **Numeric menu: 32K / 64K / 128K (default) / 256K / 512K / 1024K** | Larger sizes appear **only when they fit**: weights + estimated KV cache + 2 GB must stay inside the GPU budget. For Ollama it also queries `/api/show` for the model's own ceiling. **Not asked when only one size fits.** |
 | `launchInferenceNetworkSelector <engine>` | localhost (default) or LAN — **for every engine**, not just Ollama | Refuses non-private addresses, warns that no engine authenticates, notes the DHCP caveat |
 | `launchInferenceFreeResources` | Every open desktop app, biggest memory first, `Close? [y/N]` | Never touches the app hosting this session, Finder, or a running engine |
 | `launchInferencePrerequisites <engine> <model> <ctx>` | Hard gate: weights + KV + runtime vs. GPU budget | Fails with the exact `sysctl` command to raise the limit |
@@ -27,6 +27,10 @@ three engines.)
 
 Choices persist in `~/.launchInference.conf`, so the next run defaults to what
 you picked last.
+
+**Self-answering questions are never asked.** Every selector — engine, model,
+context, coding agent — announces and proceeds when exactly one option is
+valid, and only presents a menu when there is a real choice to make.
 
 ## What each engine is started with
 

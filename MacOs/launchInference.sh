@@ -272,6 +272,11 @@ launchInferenceModelSelector() {
         fail "No models installed for ${engine} — run ./install.sh to download one."
         return 1
     fi
+    if [ "${#models[@]}" -eq 1 ]; then
+        ok "Only one ${engine} model installed: ${models[0]} ($(engineModelSizeGb "$engine" "${models[0]}") GB)"
+        echo "${models[0]}"
+        return 0
+    fi
 
     echo >&2
     echo "${BOLD}${engine} models:${RESET}" >&2
@@ -335,6 +340,12 @@ except Exception: print(0)' 2>/dev/null)
     if [ "${#opts[@]}" -eq 0 ]; then
         warn "Even 32K does not fit the GPU budget — using 32768 anyway; expect swapping."
         echo 32768; return 0
+    fi
+
+    if [ "${#opts[@]}" -eq 1 ]; then
+        ok "Only one context size fits: $(( ${opts[0]} / 1024 ))K tokens — using it."
+        tune_set "CTX_${engine}" "${opts[0]}"
+        echo "${opts[0]}"; return 0
     fi
 
     local i=1 defnum=1 j=1 prev
