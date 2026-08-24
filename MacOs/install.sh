@@ -2,22 +2,25 @@
 #
 # install.sh — Local AI coding stack installer (universal, function-based)
 #
-# Every step is an independent function, prefixed installOllama*. Each function
+# Every step is an independent function, prefixed installAiStack*. Each function
 # checks its own prerequisites and whether the work is already done, and
 # proposes an update when one is available — so the script (or any single
 # function) can be run any number of times.
 #
-#   installOllamaSanity          platform + host RAM detection (sets globals)
-#   installOllamaDiskGate        HARD BLOCK until enough free disk
-#   installOllamaHomebrew        Homebrew present / updated
-#   installOllamaEngine          Ollama itself (.app -> brew migration, upgrade)
-#   installOllamaServer          server running; localhost-only or LAN binding
-#   installOllamaUv              uv (needed by mlx-lm)
-#   installOllamaMlx             mlx-lm (Apple-native inference)
-#   installOllamaClaudeCli       Claude Code CLI (the agent frontend)
-#   installOllamaModels          RAM-aware model menu: pick & pull until "N"
-#   installOllamaVerification    throughput test + status summary
-#   installOllama                wrapper — runs all of the above in order
+# Steps carrying "Ollama" in the name are engine-specific; the others apply to
+# the stack as a whole (and stay put when other engines are added).
+#
+#   installAiStackSanity         platform + host RAM detection (sets globals)
+#   installAiStackDiskGate       HARD BLOCK until enough free disk
+#   installAiStackHomebrew       Homebrew present / updated
+#   installAiStackOllamaEngine   Ollama itself (.app -> brew migration, upgrade)
+#   installAiStackOllamaServer   server running; localhost-only or LAN binding
+#   installAiStackUv             uv (needed by mlx-lm)
+#   installAiStackMlx            mlx-lm (Apple-native inference)
+#   installAiStackClaudeCli      Claude Code CLI (the agent frontend)
+#   installAiStackOllamaModels   RAM-aware Ollama model menu: pick & pull until "N"
+#   installAiStackVerification   status summary
+#   installAiStack               wrapper — runs all of the above in order
 #
 # Usage:
 #   ./install.sh                 # full pipeline
@@ -132,7 +135,7 @@ ollama_prune_orphan_blobs() {
     ok "Cleaned up failed-download leftovers: freed $((after - before)) GB (free now: ${after} GB)."
 }
 
-# Where to reach the Ollama API; installOllamaServer may switch it to a LAN IP.
+# Where to reach the Ollama API; installAiStackOllamaServer may switch it to a LAN IP.
 OLLAMA_API="${OLLAMA_API:-127.0.0.1}"
 ollama_server_up() { curl -sf "http://${OLLAMA_API}:11434/api/version" >/dev/null 2>&1; }
 lan_ip() { ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null; }
@@ -150,8 +153,8 @@ require_disk() {
 }
 
 # ---------- step: sanity — platform + host RAM (sets TOTAL_GB / GPU_GB) ------
-installOllamaSanity() {
-    info "installOllamaSanity — platform and memory detection"
+installAiStackSanity() {
+    info "installAiStackSanity — platform and memory detection"
     if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
         fail "This script targets Apple Silicon macOS. Aborting."
         return 1
@@ -170,8 +173,8 @@ installOllamaSanity() {
 # ---------- step: HARD GATE — disk space -------------------------------------
 MIN_DISK_GB=25
 RECOMMENDED_DISK_GB=60
-installOllamaDiskGate() {
-    info "installOllamaDiskGate — disk space (need >= ${MIN_DISK_GB} GB, ${RECOMMENDED_DISK_GB}+ recommended)"
+installAiStackDiskGate() {
+    info "installAiStackDiskGate — disk space (need >= ${MIN_DISK_GB} GB, ${RECOMMENDED_DISK_GB}+ recommended)"
     local have
     while true; do
         have=$(free_gb)
@@ -216,8 +219,8 @@ installOllamaDiskGate() {
 }
 
 # ---------- step: Homebrew ---------------------------------------------------
-installOllamaHomebrew() {
-    info "installOllamaHomebrew — package manager"
+installAiStackHomebrew() {
+    info "installAiStackHomebrew — package manager"
     if command -v brew >/dev/null 2>&1; then
         ok "Homebrew present: $(brew --version | head -1)"
         return 0
@@ -231,9 +234,9 @@ installOllamaHomebrew() {
 }
 
 # ---------- step: Ollama engine ----------------------------------------------
-installOllamaEngine() {
-    info "installOllamaEngine — the Ollama runtime"
-    command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew (run installOllamaHomebrew)."; return 1; }
+installAiStackOllamaEngine() {
+    info "installAiStackOllamaEngine — the Ollama runtime"
+    command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew (run installAiStackHomebrew)."; return 1; }
 
     if [ -d "/Applications/Ollama.app" ]; then
         warn "Standalone Ollama.app detected — not brew-managed ('brew upgrade ollama' cannot see it)."
@@ -277,9 +280,9 @@ installOllamaEngine() {
 }
 
 # ---------- step: server + network exposure ----------------------------------
-installOllamaServer() {
-    info "installOllamaServer — server process and network binding"
-    command -v ollama >/dev/null 2>&1 || { fail "Prerequisite missing: ollama binary (run installOllamaEngine)."; return 1; }
+installAiStackOllamaServer() {
+    info "installAiStackOllamaServer — server process and network binding"
+    command -v ollama >/dev/null 2>&1 || { fail "Prerequisite missing: ollama binary (run installAiStackOllamaEngine)."; return 1; }
 
     echo "    Network exposure options:"
     echo "      localhost — API on 127.0.0.1 only; nothing else can connect (default, safest)"
@@ -374,8 +377,8 @@ EOF
 }
 
 # ---------- step: uv ---------------------------------------------------------
-installOllamaUv() {
-    info "installOllamaUv — Python tool manager (needed by mlx-lm)"
+installAiStackUv() {
+    info "installAiStackUv — Python tool manager (needed by mlx-lm)"
     command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew."; return 1; }
     if command -v uv >/dev/null 2>&1; then
         ok "uv present: $(uv --version)"
@@ -390,9 +393,9 @@ installOllamaUv() {
 }
 
 # ---------- step: mlx-lm -----------------------------------------------------
-installOllamaMlx() {
-    info "installOllamaMlx — Apple-native inference (fastest path on this chip)"
-    command -v uv >/dev/null 2>&1 || { fail "Prerequisite missing: uv (run installOllamaUv)."; return 1; }
+installAiStackMlx() {
+    info "installAiStackMlx — Apple-native inference (fastest path on this chip)"
+    command -v uv >/dev/null 2>&1 || { fail "Prerequisite missing: uv (run installAiStackUv)."; return 1; }
     if uv tool list 2>/dev/null | grep -q '^mlx-lm'; then
         # installed: check for updates automatically, ask only if one exists
         local cur latest
@@ -414,8 +417,8 @@ installOllamaMlx() {
 }
 
 # ---------- step: Claude Code CLI --------------------------------------------
-installOllamaClaudeCli() {
-    info "installOllamaClaudeCli — Claude Code CLI (frontend for aiModelLauncher.sh)"
+installAiStackClaudeCli() {
+    info "installAiStackClaudeCli — Claude Code CLI (frontend for aiModelLauncher.sh)"
     if command -v claude >/dev/null 2>&1; then
         # rerun path: version check is AUTOMATIC (works for npm and native
         # installs alike); the update question appears only when needed,
@@ -533,10 +536,15 @@ loadModelCatalog() {
     ok "Model list: ${MODEL_LIST_ENGINE}/$(basename "$file") — ${#OLLAMA_MODEL_CATALOG[@]} models (host RAM ${ram} GB)."
 }
 
-installOllamaModels() {
-    info "installOllamaModels — download models suited to this host (${TOTAL_GB:-?} GB RAM)"
-    command -v ollama >/dev/null 2>&1 || { fail "Prerequisite missing: ollama (run installOllamaEngine)."; return 1; }
-    ollama_server_up || { fail "Prerequisite missing: running server (run installOllamaServer)."; return 1; }
+installAiStackOllamaModels() {
+    info "installAiStackOllamaModels — Ollama models suited to this host (${TOTAL_GB:-?} GB RAM)"
+    # Ollama models are only relevant when Ollama itself is installed. Not an
+    # error: other engines (Llama.cpp, MLX-LM) may be the ones in use.
+    if ! command -v ollama >/dev/null 2>&1; then
+        warn "Ollama is not installed — skipping the Ollama model list."
+        return 0
+    fi
+    ollama_server_up || { fail "Ollama is installed but its server is not running (run installAiStackOllamaServer)."; return 1; }
     [ -z "${TOTAL_GB:-}" ] && TOTAL_GB=$(( $(sysctl -n hw.memsize) / 1073741824 ))
 
     # catalog comes from ModelLists/<Engine>/<RAM>_GB_Ram.json
@@ -667,8 +675,8 @@ installOllamaModels() {
 }
 
 # ---------- step: verification -----------------------------------------------
-installOllamaVerification() {
-    info "installOllamaVerification — status and throughput"
+installAiStackVerification() {
+    info "installAiStackVerification — status and throughput"
     echo
     echo "${BOLD}================= Install summary =================${RESET}"
     command -v brew   >/dev/null 2>&1 && ok "Homebrew: $(brew --version | head -1)"     || fail "Homebrew: missing"
@@ -688,22 +696,22 @@ installOllamaVerification() {
 }
 
 # ---------- wrapper ----------------------------------------------------------
-installOllama() {
+installAiStack() {
     echo "${BOLD}=============================================================${RESET}"
     echo "${BOLD} Local AI coding stack — installer (universal, re-runnable)${RESET}"
     echo "${BOLD}=============================================================${RESET}"
-    installOllamaSanity        || return 1
-    installOllamaDiskGate      || return 1
-    installOllamaHomebrew      || return 1
-    installOllamaEngine        || return 1
-    installOllamaServer        || warn "Continuing without a running server."
-    installOllamaUv            && installOllamaMlx
-    installOllamaClaudeCli
-    installOllamaModels
-    installOllamaVerification
+    installAiStackSanity        || return 1
+    installAiStackDiskGate      || return 1
+    installAiStackHomebrew      || return 1
+    installAiStackOllamaEngine        || return 1
+    installAiStackOllamaServer        || warn "Continuing without a running server."
+    installAiStackUv            && installAiStackMlx
+    installAiStackClaudeCli
+    installAiStackOllamaModels
+    installAiStackVerification
 }
 
 # ---------- run pipeline when executed (not sourced) -------------------------
 if [ "${BASH_SOURCE[0]:-}" = "$0" ]; then
-    installOllama
+    installAiStack
 fi

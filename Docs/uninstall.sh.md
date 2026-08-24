@@ -1,42 +1,58 @@
-# uninstall.sh — Local AI coding stack remover
+# uninstall.sh — Local AI coding stack remover (function-based)
 
 ## What it does
 
-Interactively removes the stack that `install.sh` builds — models, mlx-lm,
-Ollama, its data directory, uv — asking per item, in **reverse dependency
-order**: most-dependent things first, foundations last. Homebrew itself is
-deliberately never touched.
+Removes the stack that `install.sh` builds, one layer at a time, asking before
+every action. Structurally it is the mirror image of the installer: same
+function-per-step shape, same prefix convention (`uninstallAiStack*`, with
+`Ollama` in the name only for engine-specific layers), same `source`-and-call
+usability — but the order is reversed, from the **most dependent** layer down
+to the foundations.
 
-## How it works
+## The gate
 
-| Step | What | Notes |
+**While any Ollama model is installed, nothing below it may be removed.**
+`uninstallAiStackOllamaModels` returns non-zero if models remain, and the
+wrapper stops right there, keeping Ollama, mlx-lm, the Claude CLI and uv —
+everything the models depend on. Remove every model to reach the foundation
+layers. `uninstallAiStackOllamaEngine` enforces the same rule independently, so
+it refuses even when called directly with models present.
+
+## How it works — one function per layer
+
+| Function | Layer | Behavior |
 |---|---|---|
-| 1 | **Models — the gate for everything below** | **Numbered menu, mirror of install.sh's download menu**: installed models listed with sizes and current free disk, pick one by number to remove (freed GB reported), menu re-renders. The uninstall proceeds to steps 2–6 **only when zero models remain** — while models exist, the foundations they depend on must stay, so **N = cancel the whole uninstallation** (everything kept), not a skip. Starts the Ollama server temporarily if needed, and stops it again on both paths. |
-| 2 | **mlx-lm** | Depends on uv, so removed before uv. Offers to also delete the HuggingFace model cache (`~/.cache/huggingface`) with its measured size. |
-| 3 | **Ollama itself** | Sub-order: stop brew service → quit app → remove LAN LaunchAgent (`local.ollama.lan.plist`, if install.sh created one) → `brew uninstall` → remove standalone `.app` + support files → remove stray `/usr/local/bin/ollama` symlink. Handles both install kinds. |
-| 4 | **`~/.ollama` data dir** | Separate from step 3 on purpose. Holds ALL model blobs (+ the machine's Ed25519 registry keypair). **Double confirmation** — this is the only unrecoverable step; everything else can be reinstalled. |
-| 5 | **uv** | Warns if uv still manages other tools before asking. |
-| 6 | **Homebrew** | Never removed — it manages software beyond this stack. Link provided for manual removal. |
-
-Ends with a summary of what is still installed vs. removed. Safe to re-run;
-already-removed items are detected and skipped.
+| `uninstallAiStackOllamaModels` | the models — **gate** | Numbered menu mirroring the installer's download menu: models with sizes and current free disk, pick by number to remove (freed GB reported), menu re-renders, until none remain (→ descend) or **N** cancels the whole uninstall. Starts the Ollama server temporarily if needed, stops it again on every exit path. |
+| `uninstallAiStackMlx` | mlx-lm | Removes the uv tool, then offers the separate (often large) `~/.cache/huggingface` model cache — default No, since it is pure re-downloadable cache. |
+| `uninstallAiStackClaudeCli` | Claude Code CLI | Detects npm-managed vs. native install and uses the matching removal. Default **No** — this is the tool that drives the local models and may be running the current session. `~/.claude` (sessions, settings, memory) is never touched. |
+| `uninstallAiStackOllamaEngine` | Ollama runtime | Refuses while models exist. Otherwise stops every way it can be running (brew service, LAN LaunchAgent, app, bare `ollama serve`), then removes the brew formula, the standalone `.app` plus its five support paths, and the stray `/usr/local/bin/ollama` symlink. |
+| `uninstallAiStackOllamaData` | `~/.ollama` | The only unrecoverable step: every model blob plus this machine's registry keypair. Size shown, **double confirmation**, both defaulting to No. |
+| `uninstallAiStackUv` | uv | Warns which tools uv still manages before asking (default No). |
+| `uninstallAiStackHomebrew` | Homebrew | Reports only — never removed, since it manages software far beyond this stack. |
+| `uninstallAiStackStatus` | — | What is left standing, plus free disk. Also printed when the gate stops the run. |
+| `uninstallAiStack` | wrapper | Runs the layers in order, enforcing the gate. |
 
 ## Why it is necessary
 
-- **Ordering prevents orphans.** Removing Ollama before its models leaves 20 GB
-  blobs nothing can manage; removing uv before mlx-lm leaves an unmanageable
-  tool. Reverse-dependency order guarantees nothing is removed while something
-  still depends on it.
+- **Ordering prevents orphans.** Removing Ollama before its models leaves
+  tens of GB of blobs that nothing can manage; removing uv before mlx-lm
+  leaves an unmanageable tool. Reverse-dependency order plus the gate
+  guarantee nothing is removed while something still stands on it.
 - **Two install kinds.** Ollama may exist as a brew formula *and/or* the
-  standalone app; a naive `brew uninstall` misses the app's five scattered
-  support paths. The script knows both layouts.
-- **The data-dir split protects the expensive part.** Uninstalling the program
-  (recoverable in minutes) and deleting the models (hours of re-downloading)
-  are different decisions, so they are separate questions with different
-  levels of confirmation.
+  standalone app, and the Claude CLI as an npm package *or* a native install;
+  a naive removal misses the other layout's files. Each function knows both.
+- **The expensive step is isolated.** Uninstalling the program (minutes to
+  reinstall) and deleting the model blobs (hours to re-download) are different
+  decisions, so they are separate functions with different confirmation
+  strength.
 
 ## Usage
 
 ```bash
-./uninstall.sh
+./uninstall.sh                          # full pipeline, gate enforced
+```
+
+```bash
+source uninstall.sh                     # à la carte, e.g.:
+uninstallAiStackMlx                     # just drop mlx-lm
 ```

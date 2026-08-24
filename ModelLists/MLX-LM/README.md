@@ -12,6 +12,6 @@ Engine-specific notes for whoever fills this in:
   `-bf16` rather than `Q4_K_M`/`Q6_K`. Do not copy Ollama tags across.
 - MLX is Apple-silicon only, so these lists are relevant to `MacOs/` and have
   no Debian counterpart.
-- `mlx-lm` is already installed by `installOllamaMlx`; it generally reaches
+- `mlx-lm` is already installed by `installAiStackMlx`; it generally reaches
   higher throughput than Ollama on this hardware, which is the motivation for
   supporting it as a second engine.

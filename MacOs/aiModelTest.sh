@@ -68,7 +68,7 @@ aiModelTestServer() {
         ok "Ollama server up: $v"
         R_server=PASS
     else
-        fail "No Ollama server at ${API}. Start it (aiModelLauncher.sh / installOllamaServer)."
+        fail "No Ollama server at ${API}. Start it (aiModelLauncher.sh / installAiStackOllamaServer)."
         R_server=FAIL
         return 1
     fi

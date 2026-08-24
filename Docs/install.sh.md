@@ -18,19 +18,19 @@ script and each individual function can be run any number of times.
 
 | Function | What | Gate / re-run behavior |
 |---|---|---|
-| `installOllamaSanity` | Platform check + **host RAM detection**; sets `TOTAL_GB` and `GPU_GB` (~75 % of RAM, the macOS GPU allocation) used by the model menu | Aborts under 16 GB RAM or non-Apple-Silicon |
-| `installOllamaDiskGate` | **HARD BLOCK** below 25 GB free (60+ recommended). Shows shortfall + measured disk hogs, loops *Enter = re-check / q = quit*. No bypass. | Passes instantly when already met |
-| `installOllamaHomebrew` | Homebrew present or offered | Skips if present |
-| `installOllamaEngine` | Ollama runtime. Detects install kind: standalone .app → offers brew migration (models in `~/.ollama` preserved); brew-managed → checks `brew outdated` and **proposes upgrade only if one exists**; missing → offers install | Idempotent |
-| `installOllamaServer` | Server + **network exposure choice**: localhost-only or LAN-only — binds the Mac's private IP (refuses non-RFC-1918), warns Ollama has **no authentication**, notes the DHCP caveat, installs a dedicated LaunchAgent (`local.ollama.lan.plist`) since `brew services` drops env vars. Prints actual listening sockets from `lsof`. | **Detects what is active now** (LAN LaunchAgent present, or server answering on the LAN IP) and defaults the question to keep it — Enter = no change. An explicit LAN→localhost switch tears the LAN agent down. |
-| `installOllamaUv` | uv (prerequisite of mlx-lm); proposes upgrade if brew reports one | Idempotent |
-| `installOllamaMlx` | mlx-lm via uv | When installed, **checks PyPI automatically** and asks to update only if a newer version actually exists — no question on an up-to-date rerun |
-| `installOllamaClaudeCli` | Claude Code CLI — the frontend aiModelLauncher.sh connects to local models | First run (missing) → proposes installation (default Y). Rerun (present) → **automatic** version check against the npm registry (works for npm *and* native installs); only when a newer version exists does it ask "Update now? [Y/n]" — updating via the matching mechanism (`npm install -g` or `claude update`). |
-| `installOllamaModels` | **Merged model step — see below** | Loops until "N" |
-| `installOllamaVerification` | Full status summary (versions, server, models) + optional `--verbose` throughput test | Pure read/report |
-| `installOllama` | **Wrapper** — runs all of the above in order; hard-fails on sanity/disk/brew/engine, degrades gracefully on the rest | — |
+| `installAiStackSanity` | Platform check + **host RAM detection**; sets `TOTAL_GB` and `GPU_GB` (~75 % of RAM, the macOS GPU allocation) used by the model menu | Aborts under 16 GB RAM or non-Apple-Silicon |
+| `installAiStackDiskGate` | **HARD BLOCK** below 25 GB free (60+ recommended). Shows shortfall + measured disk hogs, loops *Enter = re-check / q = quit*. No bypass. | Passes instantly when already met |
+| `installAiStackHomebrew` | Homebrew present or offered | Skips if present |
+| `installAiStackOllamaEngine` | Ollama runtime. Detects install kind: standalone .app → offers brew migration (models in `~/.ollama` preserved); brew-managed → checks `brew outdated` and **proposes upgrade only if one exists**; missing → offers install | Idempotent |
+| `installAiStackOllamaServer` | Server + **network exposure choice**: localhost-only or LAN-only — binds the Mac's private IP (refuses non-RFC-1918), warns Ollama has **no authentication**, notes the DHCP caveat, installs a dedicated LaunchAgent (`local.ollama.lan.plist`) since `brew services` drops env vars. Prints actual listening sockets from `lsof`. | **Detects what is active now** (LAN LaunchAgent present, or server answering on the LAN IP) and defaults the question to keep it — Enter = no change. An explicit LAN→localhost switch tears the LAN agent down. |
+| `installAiStackUv` | uv (prerequisite of mlx-lm); proposes upgrade if brew reports one | Idempotent |
+| `installAiStackMlx` | mlx-lm via uv | When installed, **checks PyPI automatically** and asks to update only if a newer version actually exists — no question on an up-to-date rerun |
+| `installAiStackClaudeCli` | Claude Code CLI — the frontend aiModelLauncher.sh connects to local models | First run (missing) → proposes installation (default Y). Rerun (present) → **automatic** version check against the npm registry (works for npm *and* native installs); only when a newer version exists does it ask "Update now? [Y/n]" — updating via the matching mechanism (`npm install -g` or `claude update`). |
+| `installAiStackOllamaModels` | **Merged model step — see below** | Loops until "N" |
+| `installAiStackVerification` | Full status summary (versions, server, models) + optional `--verbose` throughput test | Pure read/report |
+| `installAiStack` | **Wrapper** — runs all of the above in order; hard-fails on sanity/disk/brew/engine, degrades gracefully on the rest | — |
 
-## The model menu (`installOllamaModels`)
+## The model menu (`installAiStackOllamaModels`)
 
 Replaces the old fixed "step 7 + step 8" model pulls with a universal,
 hardware-aware chooser:
@@ -112,7 +112,7 @@ picks its own list, nothing is hardcoded.
 
 ```bash
 source install.sh             # à la carte, e.g.:
-installOllamaModels           # just the model menu
+installAiStackOllamaModels           # just the model menu
 ```
 
 Companions: [uninstall.sh.md](uninstall.sh.md) (reversal),

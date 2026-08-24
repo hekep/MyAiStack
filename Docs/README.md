@@ -24,8 +24,8 @@ Debian box.
 
 | Script | Doc | One-liner |
 |---|---|---|
-| [install.sh](../install.sh) | [install.sh.md](install.sh.md) | Function-per-step, re-runnable installer (`installOllama*` + `installOllama` wrapper): Homebrew → Ollama (.app→brew migration, upgrade proposals) → server with localhost/LAN choice → uv → mlx-lm → RAM-aware model menu (biggest→smallest, loops until N) → verification. Hard disk gate. |
-| [uninstall.sh](../uninstall.sh) | [uninstall.sh.md](uninstall.sh.md) | Reverses install.sh in reverse-dependency order: models → mlx-lm → Ollama → `~/.ollama` (double-confirmed) → uv. Homebrew untouched. |
+| [install.sh](../install.sh) | [install.sh.md](install.sh.md) | Function-per-step, re-runnable installer (`installAiStack*` + `installAiStack` wrapper): Homebrew → Ollama (.app→brew migration, upgrade proposals) → server with localhost/LAN choice → uv → mlx-lm → RAM-aware model menu (biggest→smallest, loops until N) → verification. Hard disk gate. |
+| [uninstall.sh](../uninstall.sh) | [uninstall.sh.md](uninstall.sh.md) | Function-per-layer remover (`uninstallAiStack*` + `uninstallAiStack` wrapper), mirror of the installer in reverse-dependency order: models (numbered menu, **gate**) → mlx-lm → Claude CLI → Ollama → `~/.ollama` (double-confirmed) → uv. Nothing below the models is removed while any model remains. Homebrew untouched. |
 | [noRole.sh](../noRole.sh) | — | Unified purge dispatcher: discovers the `no<Role>Role.sh` scripts in the OS folder. `./noRole.sh Docker` (case-insensitive) launches one directly; with no argument it offers each available role as a y/N question (default No). |
 | [MacOs/noDockerRole.sh](../MacOs/noDockerRole.sh) | [noDockerRole.sh.md](noDockerRole.sh.md) | "Reg cleaner" purge of Docker Desktop — app, 33 GB VM disk, root daemons, symlinks, traces, keychain — protecting `~/MyDocker*`. Reports GB gained per step. Run via `./noRole.sh Docker`. |
 | [MacOs/noCodexRole.sh](../MacOs/noCodexRole.sh) | [noCodexRole.sh.md](noCodexRole.sh.md) | Removes OpenAI Codex and ~2.2 GB of leftovers while guaranteeing ChatGPT survives; handles the two Codex/ChatGPT grey zones explicitly. Run via `./noRole.sh Codex`. |
