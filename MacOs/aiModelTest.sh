@@ -119,14 +119,20 @@ aiModelTestEnsureServing() {
             if engine_up Llama.cpp "$host"; then
                 cur=$(curl -sf --max-time 5 "${TEST_ENDPOINT}/v1/models" 2>/dev/null \
                       | python3 -c 'import json,sys;d=json.load(sys.stdin);xs=d.get("data") or d.get("models") or [];print((xs[0].get("id") or xs[0].get("name") or "") if xs else "")' 2>/dev/null)
-                case "$cur" in *"$(basename "$f")"*) return 0 ;; esac
+                # a server started with --alias reports the tag; an older one
+                # (or one started by hand) reports the .gguf path — accept both,
+                # so an already-correct 30 GB model is never reloaded needlessly
+                case "$cur" in
+                    "$model"|*"$(basename "$f")"*) return 0 ;;
+                esac
                 warn "llama-server is serving something else — restarting it."
                 # match the Homebrew binary path: Ollama runs its own runner
                 # ALSO called llama-server, and killing that breaks Ollama.
                 llamacppKillOurs; sleep 2
             fi
             info "Starting llama-server with $(basename "$f")..."
-            nohup llama-server -m "$f" -c "${LLAMACPP_CTX:-32768}" --host "$host" --port "$port" \
+            nohup llama-server -m "$f" -c "${LLAMACPP_CTX:-32768}" --alias "$model" \
+                  --host "$host" --port "$port" \
                   >"${TMPDIR:-/tmp}/llama-server-test.log" 2>&1 &
             TEST_SERVER_PID=$!
             info "Waiting for llama-server to load the model (it answers 503 until ready)..."

@@ -633,7 +633,11 @@ launchInferenceStart() {
             local f
             f="${LLAMACPP_MODEL_DIR}/$(printf '%s' "$model" | sed 's|/|__|g; s|:|@|').gguf"
             [ -e "$f" ] || { fail "GGUF not found: ${f}"; return 1; }
-            nohup llama-server -m "$f" -c "$ctx" --host "$bind" --port "$port" \
+            # --alias: without it the API advertises the full .gguf path, and
+            # agents infer a runtime from the uploader org in the filename
+            # (e.g. "lmstudio-community" -> "I'm running through LM Studio").
+            nohup llama-server -m "$f" -c "$ctx" --alias "$model" \
+                  --host "$bind" --port "$port" \
                   >"${TMPDIR:-/tmp}/llama-server.log" 2>&1 &
             local t=0
             info "Waiting for llama-server to finish loading the model (503 until ready)..."

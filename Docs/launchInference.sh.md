@@ -37,7 +37,7 @@ valid, and only presents a menu when there is a real choice to make.
 | Engine | Command | API | Port |
 |---|---|---|---|
 | Ollama | `ollama serve` with `OLLAMA_CONTEXT_LENGTH`, `OLLAMA_HOST`, flash attention + q8_0 KV cache, then loads the model with a 60 min keep-alive | **Anthropic** + OpenAI | 11434 |
-| llama.cpp | `llama-server -m <gguf> -c <ctx> --host <bind> --port` | OpenAI-compatible | 8080 |
+| llama.cpp | `llama-server -m <gguf> -c <ctx> --alias <tag> --host <bind> --port` | OpenAI-compatible | 8080 |
 | MLX-LM | `mlx_lm.server --model <repo> --host <bind> --port` | OpenAI-compatible | 8081 |
 
 ## Agent / engine compatibility
