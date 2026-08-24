@@ -725,7 +725,14 @@ llamacppPullModel() {
         aiStackUsage "llamacppPullModel <tag>" "tag     : hf-repo:QUANT — downloads the GGUF into ~/Models/llama.cpp"
         return 2
     fi
-    local tag="$1" repo="${tag%:*}" quant="${tag##*:}" out file url
+    # NB: separate statements on purpose. bash expands every argument to
+    # "local" before assigning any of them, so "local a=$1 b=${a%:*}" leaves b
+    # empty — or worse, silently picks up a same-named variable from the
+    # caller's scope (local is dynamically scoped), which is why this worked
+    # from aiStackModelMenu but not when called directly.
+    local tag="$1" out file url repo quant
+    repo="${tag%:*}"
+    quant="${tag##*:}"
     out=$(llamacppLocalFile "$tag")
     mkdir -p "$LLAMACPP_MODEL_DIR"
 
