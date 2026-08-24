@@ -92,6 +92,33 @@ fi
 export PROMPT
 info "Test prompt: \"${PROMPT}\""
 
+# ---------- anything already serving? ----------------------------------------
+# The sweep needs the machine to itself: it stops servers between models so
+# each one is measured on an empty machine. Say what is running before taking
+# it down, rather than killing the user's session silently.
+RUNNING=$(busyEngines)
+if [ -n "$RUNNING" ]; then
+    echo >&2
+    warn "${BOLD}A model is already loaded in memory:${RESET}"
+    while IFS='|' read -r eng what mem; do
+        [ -z "$eng" ] && continue
+        printf "    %-10s %-28s %s\n" "$eng" "$what" "$mem" >&2
+    done <<< "$RUNNING"
+    warn "Its model stays resident and would distort every measurement — and two"
+    warn "big models loaded at once can take the whole machine down."
+    if ask_yn "Tear it down and run the sweep?  (n = exit without testing)"; then
+        freeAllEngines
+    else
+        echo >&2
+        ok "Exiting — nothing was touched, your loaded model is untouched."
+        warn "The sweep needs the machine to itself: it stops engines between models"
+        warn "by design, so it cannot run alongside your session."
+        exit 0
+    fi
+else
+    ok "No model is resident — the machine is free for the sweep."
+fi
+
 # ---------- what is there to test --------------------------------------------
 ENGINES=()
 while IFS= read -r e; do [ -n "$e" ] && ENGINES+=("$e"); done < <(enginesWithModels)

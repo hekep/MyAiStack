@@ -116,7 +116,25 @@ engine_up() {   # $1 engine, $2 host — is it up AND ready to infer?
     esac
 }
 
-# what is currently serving, with its memory footprint
+# engines actually HOLDING a model in memory (an idle Ollama daemon is not one:
+# it costs nothing and gets reused). Used by things that care about free memory.
+busyEngines() {
+    local pid rss m sz
+    for m in $(ollama ps 2>/dev/null | awk 'NR>1 {print $1}'); do
+        sz=$(ollama ps 2>/dev/null | awk -v M="$m" '$1==M {print $3" "$4}')
+        echo "Ollama|model ${m} resident|${sz}"
+    done
+    for pid in $(llamacppOurPids); do
+        rss=$(ps -o rss= -p "$pid" | awk '{printf "%.1f GB", $1/1048576}')
+        echo "Llama.cpp|llama-server pid ${pid}|${rss}"
+    done
+    for pid in $(pgrep -f "mlx_lm.server" 2>/dev/null); do
+        rss=$(ps -o rss= -p "$pid" | awk '{printf "%.1f GB", $1/1048576}')
+        echo "MLX-LM|mlx_lm.server pid ${pid}|${rss}"
+    done
+}
+
+# what is currently serving, with its memory footprint (daemon included)
 runningEngines() {
     local pid rss
     if curl -sf --max-time 2 "http://127.0.0.1:${OLLAMA_PORT}/api/version" >/dev/null 2>&1; then

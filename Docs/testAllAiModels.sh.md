@@ -10,12 +10,19 @@ comparison table.
 
 1. Asks for the prompt once (empty = *"What would be next best feature to
    code"*) and exports it, so the per-model tests do not ask again.
-2. Enumerates engines that have models, and sweeps
+2. **Before any test runs**, checks whether a model is already loaded
+   (`busyEngines`: Ollama-resident models, our llama-server, mlx_lm.server —
+   an *idle* Ollama daemon does not count, it holds nothing). If something is
+   loaded it is listed with its memory, and you are asked
+   **"Tear it down and run the sweep? [Y/n]"** — **n exits immediately**,
+   touching nothing, because the sweep stops engines between models by design
+   and cannot run alongside your session.
+3. Enumerates engines that have models, and sweeps
    `for each engine → for each of its models`.
-3. Per model: `aiModelTestEnsureServing` (starts the Ollama daemon, or
+4. Per model: `aiModelTestEnsureServing` (starts the Ollama daemon, or
    `llama-server` / `mlx_lm.server` bound to that model) → `aiModelTestServer`
    → `aiModelTestRun`.
-4. **Frees the hardware before *and* after every model** — `freeAllEngines`
+5. **Frees the hardware before *and* after every model** — `freeAllEngines`
    unloads all Ollama models, kills our llama-server and any mlx server, then
    **waits (up to 40 s, escalating to SIGKILL) until the processes are really
    gone**, and reports the memory recovered. This is not tidiness: two 30 GB
@@ -27,7 +34,7 @@ comparison table.
      because Ollama runs an internal subprocess of the same name.
    - A **fit pre-flight** (`weights + 4 GB ≤ GPU budget`) skips any single
      model too large for the machine instead of trying and crashing it.
-5. Prints the table: **engine · model · tokens · time · tok/s · tools · ctx ·
+6. Prints the table: **engine · model · tokens · time · tok/s · tools · ctx ·
    total**, with long model ids trimmed from the left so the quant stays
    visible.
 
