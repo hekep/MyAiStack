@@ -24,6 +24,31 @@
 #
 # AI_STACK_HOME must point at the repo; installAliases.sh writes it into the rc.
 
+# Running this file does nothing useful: the functions would be defined inside a
+# child process that exits immediately. Detect that and say so.
+# The test differs per shell — zsh sets $0 to the sourced file, so comparing $0
+# would wrongly fire on a legitimate "source" and exit the user's login shell.
+_sf_executed=1
+if [ -n "${BASH_VERSION:-}" ]; then
+    [ "${BASH_SOURCE[0]}" != "$0" ] && _sf_executed=0
+elif [ -n "${ZSH_VERSION:-}" ]; then
+    # sourced -> ZSH_EVAL_CONTEXT contains "file"; executed -> "toplevel" alone
+    case "${ZSH_EVAL_CONTEXT:-}" in *file*) _sf_executed=0 ;; esac
+fi
+if [ "$_sf_executed" = "1" ]; then
+    _sf_dir="$(cd "$(dirname "$0")" && pwd)"
+    echo "shellFunctions.sh must be SOURCED, not executed —"
+    echo "otherwise its functions are defined in a child process that exits."
+    echo
+    echo "  For this shell only:"
+    echo "      source ${_sf_dir}/shellFunctions.sh"
+    echo
+    echo "  For every future shell (adds 2 lines to your ~/.zshrc):"
+    echo "      ${_sf_dir}/installAliases.sh"
+    exit 1
+fi
+unset _sf_executed
+
 AI_STACK_HOME="${AI_STACK_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]:-${(%):-%x}}")" && pwd)}"
 
 # Resolve the OS folder holding the implementations (MacOs, Debian, ...).
