@@ -36,10 +36,20 @@ you picked last.
 | llama.cpp | `llama-server -m <gguf> -c <ctx> --host <bind> --port` | OpenAI-compatible | 8080 |
 | MLX-LM | `mlx_lm.server --model <repo> --host <bind> --port` | OpenAI-compatible | 8081 |
 
-**Claude CLI works with Ollama only.** Claude Code speaks the Anthropic
-Messages API, which Ollama serves natively; llama.cpp and MLX-LM serve
-OpenAI-compatible APIs. For those two the script prints the endpoint and says
-so plainly rather than launching a session that would fail.
+## Agent / engine compatibility
+
+| Agent | Ollama | llama.cpp | MLX-LM | Why |
+|---|---|---|---|---|
+| **Pi** | ✓ | ✓ | ✓ | drives any OpenAI-compatible endpoint; config written to `~/.pi/agent/local-models.json`, then pick with `/models` inside Pi |
+| **OpenCode** | ✓ | ✓ | ✓ | same; provider block written into `~/.config/opencode/opencode.json` with `baseURL` inside `options` |
+| **Claude Code** | ✓ | ✗ | ✗ | needs the **Anthropic** Messages API, which only Ollama serves |
+
+The selector enforces this, so an impossible pairing is never offered: with
+llama.cpp running and only Claude installed you get an explanation rather than
+a session that would fail; with llama.cpp and only Pi installed there is no
+question at all.
+
+Existing agent configs are backed up (`.bak`) before being written.
 
 ## The context estimate
 

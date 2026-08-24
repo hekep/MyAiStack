@@ -16,7 +16,8 @@ already done, and proposes an update only when one genuinely exists — so both
 the script and each individual function can be run any number of times.
 
 Steps carrying an engine name are engine-specific; the rest apply to the whole
-stack.
+stack. There are two optional layers: the **engines** (which serve tokens) and
+the **coding agents** (what you actually type into).
 
 | Function | What | Default / re-run behavior |
 |---|---|---|
@@ -27,7 +28,9 @@ stack.
 | **`installAiStackMlxmlEngine`** | **MLX-LM** — `uv tool install mlx-lm` | **Default no.** Apple-native, fastest on this chip, publishes 6-bit builds. Pulls in `uv` automatically when accepted. Present → automatic PyPI check, asks only if a newer version exists |
 | **`installAiStackOllamaEngine`** | **Ollama** — brew formula | **Default no.** Managed daemon + Anthropic-compatible API (what Claude CLI talks to), narrowest quant ladder. A standalone `Ollama.app` gets the migrate-to-brew offer; brew-managed gets an upgrade offer only if one exists |
 | `installAiStackUv` | uv | Asked normally; `installAiStackUv required` installs without asking (used by MLX-LM) |
-| `installAiStackClaudeCli` | Claude Code CLI | Missing → offers install (default Y). Present → automatic version check, asks only if newer exists |
+| **`installAiStackPiCodingAgent`** | **Pi** — `npm i -g @earendil-works/pi-coding-agent` (+ `pi install npm:pi-local-models`) | **Default YES.** Works with every engine — it drives any OpenAI-compatible endpoint |
+| **`installAiStackOpenCodeCodingAgent`** | **OpenCode** — brew (npm fallback) | **Default no.** Also engine-agnostic |
+| **`installAiStackClaudeCodingAgent`** | **Claude Code** — npm / native installer | **Default no.** Anthropic API only, so of the engines here it works with **Ollama alone** |
 | **`installAiStackLlamacppModels`** | GGUF files → `~/Models/llama.cpp` | Skipped unless llama.cpp is installed |
 | **`installAiStackMlxmlModels`** | HF repos → HuggingFace cache | Skipped unless MLX-LM is installed |
 | **`installAiStackOllamaModels`** | registry tags → `~/.ollama` | Skipped unless Ollama is installed. Prunes failed-download leftovers first |
@@ -39,7 +42,7 @@ stack.
 ```
 sanity → disk gate → Homebrew
       → llama.cpp engine → MLX-LM engine → Ollama engine      (at least one!)
-      → Claude CLI
+      → Pi → OpenCode → Claude Code                     (coding agents)
       → llama.cpp models → MLX-LM models → Ollama models
       → verification
 ```
@@ -97,6 +100,10 @@ Per-engine download behavior:
   model that loads, swaps, and generates at 1 token/s.
 - **Disk reality**: a single model is 20–30 GB; the hard gate and the
   per-download re-check keep a half-finished pull from filling the disk.
+- **Agent and engine are separate choices.** Pi and OpenCode speak the
+  OpenAI-compatible API every engine here serves; Claude Code speaks the
+  Anthropic API, which only Ollama provides. The installer offers all three and
+  launchInference.sh refuses to pair incompatible ones.
 - **Brew must not ask twice**: our questions are the ones that matter, so the
   brew calls pass `-y` and never re-prompt for the same decision.
 

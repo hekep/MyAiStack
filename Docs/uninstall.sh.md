@@ -20,11 +20,16 @@ it refuses even when called directly with models present.
 
 ## How it works — one function per layer
 
+Layer order: **models** (the gate) → **coding agents** (they sit above the
+engines) → **engines** → **their data** → **foundations**.
+
 | Function | Layer | Behavior |
 |---|---|---|
 | `uninstallAiStackOllamaModels` | the models — **gate** | Numbered menu mirroring the installer's download menu: models with sizes and current free disk, pick by number to remove (freed GB reported), menu re-renders, until none remain (→ descend) or **N** cancels the whole uninstall. Starts the Ollama server temporarily if needed, stops it again on every exit path. |
-| `uninstallAiStackMlx` | mlx-lm | Removes the uv tool, then offers the separate (often large) `~/.cache/huggingface` model cache — default No, since it is pure re-downloadable cache. |
-| `uninstallAiStackClaudeCli` | Claude Code CLI | Detects npm-managed vs. native install and uses the matching removal. Default **No** — this is the tool that drives the local models and may be running the current session. `~/.claude` (sessions, settings, memory) is never touched. |
+| `uninstallAiStackClaudeCodingAgent` | Claude Code CLI | Default **No** — it may be running this session. `~/.claude` (sessions, settings, memory) is never touched |
+| `uninstallAiStackOpenCodeCodingAgent` | OpenCode | Brew or npm, whichever installed it; offers `~/.config/opencode` separately |
+| `uninstallAiStackPiCodingAgent` | Pi | npm package; offers `~/.pi` separately |
+| `uninstallAiStackMlx` | mlx-lm / MLX-LM engine | Removes the uv tool, then offers the separate (often large) `~/.cache/huggingface` model cache — default No, since it is pure re-downloadable cache. |
 | `uninstallAiStackOllamaEngine` | Ollama runtime | Refuses while models exist. Otherwise stops every way it can be running (brew service, LAN LaunchAgent, app, bare `ollama serve`), then removes the brew formula, the standalone `.app` plus its five support paths, and the stray `/usr/local/bin/ollama` symlink. |
 | `uninstallAiStackOllamaData` | `~/.ollama` | The only unrecoverable step: every model blob plus this machine's registry keypair. Size shown, **double confirmation**, both defaulting to No. |
 | `uninstallAiStackUv` | uv | Warns which tools uv still manages before asking (default No). |

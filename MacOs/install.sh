@@ -19,7 +19,10 @@
 #   installAiStackOllamaEngine    Ollama      — default no; managed daemon + API
 #   --- shared ---
 #   installAiStackUv              uv (pulled in automatically by MLX-LM)
-#   installAiStackClaudeCli       Claude Code CLI (the agent frontend)
+#   --- coding agents (what you type into) ---
+#   installAiStackPiCodingAgent        Pi        — default YES; any engine
+#   installAiStackOpenCodeCodingAgent  OpenCode  — default no;  any engine
+#   installAiStackClaudeCodingAgent    Claude    — default no;  Ollama only
 #   --- models, one step per engine, same order, each skipped if absent ---
 #   installAiStackLlamacppModels  GGUF files -> ~/Models/llama.cpp
 #   installAiStackMlxmlModels     HF repos   -> HuggingFace cache
@@ -394,10 +397,88 @@ installAiStackMlxmlEngine() {
     uv tool install mlx-lm && ok "MLX-LM installed." || { fail "mlx-lm install failed."; return 1; }
 }
 
-# ---------- step: Claude Code CLI --------------------------------------------
-installAiStackClaudeCli() {
-    info "installAiStackClaudeCli — Claude Code CLI (frontend used by launchInference.sh)"
-    if command -v claude >/dev/null 2>&1; then
+# ---------- Coding agents ------------------------------------------------------
+# The agent is the thing you actually type into; the engine only serves tokens.
+# Compatibility matters and is enforced in launchInference.sh:
+#   Pi, OpenCode  -> any OpenAI-compatible endpoint (all three engines)
+#   Claude Code   -> Anthropic Messages API only (Ollama)
+
+pi_installed()       { command -v pi >/dev/null 2>&1; }
+opencode_installed() { command -v opencode >/dev/null 2>&1; }
+claude_installed()   { command -v claude >/dev/null 2>&1; }
+
+installed_agents() {
+    local a=""
+    pi_installed       && a="${a} Pi"
+    opencode_installed && a="${a} OpenCode"
+    claude_installed   && a="${a} Claude"
+    echo "${a# }"
+}
+
+# --- Pi (default YES) ---------------------------------------------------------
+PI_NPM_PKG="@earendil-works/pi-coding-agent"
+installAiStackPiCodingAgent() {
+    info "installAiStackPiCodingAgent — Pi (minimal terminal coding harness)"
+    if pi_installed; then
+        local cur latest
+        cur=$(pi --version 2>/dev/null | head -1 | tr -d 'v')
+        ok "Pi present: ${cur:-unknown}"
+        latest=$(npm view "$PI_NPM_PKG" version 2>/dev/null)
+        if [ -n "$latest" ] && [ -n "$cur" ] && [ "$latest" != "$cur" ]; then
+            warn "Pi update available: ${cur} -> ${latest}"
+            ask_def "Update Pi now?" "y" && npm install -g --ignore-scripts "$PI_NPM_PKG"
+        elif [ -z "$latest" ]; then
+            ok "Update check skipped (npm registry unreachable)."
+        else
+            ok "Pi ${cur} is up to date."
+        fi
+        return 0
+    fi
+    command -v npm >/dev/null 2>&1 || { warn "npm not found — install Node first (brew install node)."; return 0; }
+    echo "    Works with every engine here: it talks to any OpenAI-compatible server."
+    if ! ask_def "Install the Pi coding agent?" "y"; then
+        warn "Skipping Pi."
+        return 0
+    fi
+    npm install -g --ignore-scripts "$PI_NPM_PKG" || { fail "npm install failed."; return 1; }
+    ok "Pi installed: $(pi --version 2>/dev/null | head -1)"
+    # local model discovery, so /models lists what our engines serve
+    info "Adding local-model discovery (pi install npm:pi-local-models)..."
+    pi install npm:pi-local-models >/dev/null 2>&1 \
+        && ok "pi-local-models added." \
+        || warn "Could not add pi-local-models — run 'pi install npm:pi-local-models' by hand."
+}
+
+# --- OpenCode (default NO) ----------------------------------------------------
+installAiStackOpenCodeCodingAgent() {
+    info "installAiStackOpenCodeCodingAgent — OpenCode (terminal agentic coder)"
+    if opencode_installed; then
+        ok "OpenCode present: $(opencode --version 2>/dev/null | head -1)"
+        if brew list opencode >/dev/null 2>&1 && [ -n "$(brew outdated opencode 2>/dev/null)" ]; then
+            warn "An OpenCode update is available."
+            ask_def "Upgrade OpenCode now?" "y" && brew upgrade -y opencode
+        else
+            ok "Already up to date."
+        fi
+        return 0
+    fi
+    echo "    Also engine-agnostic: it drives any OpenAI-compatible endpoint."
+    if ! ask_def "Install the OpenCode coding agent?" "n"; then
+        warn "Skipping OpenCode."
+        return 0
+    fi
+    if command -v brew >/dev/null 2>&1; then
+        brew install -y opencode && ok "OpenCode installed." && return 0
+        warn "brew install failed — trying npm."
+    fi
+    command -v npm >/dev/null 2>&1 || { fail "Neither brew nor npm could install OpenCode."; return 1; }
+    npm install -g opencode-ai && ok "OpenCode installed." || { fail "npm install failed."; return 1; }
+}
+
+# --- Claude Code (default NO; Ollama-only) ------------------------------------
+installAiStackClaudeCodingAgent() {
+    info "installAiStackClaudeCodingAgent — Claude Code CLI"
+    if claude_installed; then
         # rerun path: version check is AUTOMATIC (works for npm and native
         # installs alike); the update question appears only when needed,
         # defaulting to Y.
@@ -425,9 +506,11 @@ installAiStackClaudeCli() {
     fi
 
     # first-run path: not installed — propose installation
-    warn "claude CLI not installed — launchInference.sh needs it for Claude sessions."
+    warn "claude CLI not installed."
+    echo "    Note: Claude Code speaks the Anthropic API, so of the engines here it"
+    echo "    only works with Ollama. Pi and OpenCode work with all three."
     if command -v npm >/dev/null 2>&1; then
-        if ask_def "Install Claude Code now (npm install -g @anthropic-ai/claude-code)?" "y"; then
+        if ask_def "Install Claude Code now (npm install -g @anthropic-ai/claude-code)?" "n"; then
             npm install -g @anthropic-ai/claude-code \
                 && ok "Installed: $(claude --version 2>/dev/null | head -1)" \
                 || fail "npm install failed — try the native installer: curl -fsSL https://claude.ai/install.sh | bash"
@@ -438,80 +521,6 @@ installAiStackClaudeCli() {
         warn "npm not found. Either install Node first (brew install node) and re-run,"
         warn "or use the native installer:  curl -fsSL https://claude.ai/install.sh | bash"
     fi
-}
-
-# ---------- step: models — RAM-aware menu, loop until N ----------------------
-# The catalog is DATA, not code: ModelLists/<Engine>/<RAM>_GB_Ram.json holds a
-# curated top-20 of code-generation models per RAM tier, biggest first, with
-# real download sizes read from the registry manifests. loadModelCatalog picks
-# the file matching this host and fills AI_MODEL_CATALOG with
-# "tag|size_gb|description" lines.
-#
-# The menu then filters further: fits the CURRENT GPU limit (need = size*1.3+2),
-# fits free disk, not already downloaded, tag verified on the registry.
-#
-# NOTE: hf.co/* GGUF entries are deliberately absent — direct HuggingFace pulls
-# fail on this Ollama version with "context deadline exceeded" at the final
-# commit (reproduced 3x with successful blob downloads; registry pulls work
-# fine). That also means Q5_K_M / Q6_K quants are unavailable: the Ollama
-# registry offers q4_K_M and q8_0.
-
-MODEL_LIST_ENGINE="${MODEL_LIST_ENGINE:-Ollama}"     # Llama.cpp / MLX-LM later
-AI_MODEL_CATALOG=()
-
-# repo root = parent of the OS folder holding this script
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
-
-# modelListFile <host_ram_gb> — largest tier <= host RAM (smallest if below all)
-modelListFile() {
-    local ram="$1" dir f tier best="" smallest=""
-    dir="${REPO_ROOT}/ModelLists/${MODEL_LIST_ENGINE}"
-    [ -d "$dir" ] || return 1
-    for f in "$dir"/*_GB_Ram.json; do
-        [ -e "$f" ] || continue
-        tier=$(basename "$f"); tier=${tier%_GB_Ram.json}
-        case "$tier" in ""|*[!0-9]*) continue ;; esac
-        if [ -z "$smallest" ] || [ "$tier" -lt "$smallest" ]; then smallest="$tier"; fi
-        if [ "$tier" -le "$ram" ]; then
-            if [ -z "$best" ] || [ "$tier" -gt "$best" ]; then best="$tier"; fi
-        fi
-    done
-    [ -z "$best" ] && best="$smallest"          # host below every tier
-    [ -z "$best" ] && return 1                  # no lists at all
-    echo "${dir}/${best}_GB_Ram.json"
-}
-
-# parseModelJson <file> — emit "tag|size_gb|description" per model
-parseModelJson() {
-    if command -v python3 >/dev/null 2>&1; then
-        python3 - "$1" <<'PYEOF'
-import json, sys
-for m in json.load(open(sys.argv[1])).get("models", []):
-    print("%s|%s|%s" % (m["tag"], m["size_gb"], m.get("description", "")))
-PYEOF
-    else
-        # fallback: the generator writes exactly one model object per line
-        sed -n 's/.*"tag": *"\([^"]*\)".*"size_gb": *\([0-9]*\).*"description": *"\([^"]*\)".*/\1|\2|\3/p' "$1"
-    fi
-}
-
-# loadModelCatalog [host_ram_gb] — fill AI_MODEL_CATALOG from the JSON list
-loadModelCatalog() {
-    local ram="${1:-${TOTAL_GB:-0}}" file line
-    [ "$ram" -gt 0 ] 2>/dev/null || ram=$(( $(sysctl -n hw.memsize) / 1073741824 ))
-    file=$(modelListFile "$ram") || {
-        fail "No model lists found in ModelLists/${MODEL_LIST_ENGINE}/ — cannot offer models."
-        return 1
-    }
-    AI_MODEL_CATALOG=()
-    while IFS= read -r line; do
-        [ -n "$line" ] && AI_MODEL_CATALOG+=("$line")
-    done < <(parseModelJson "$file")
-    if [ "${#AI_MODEL_CATALOG[@]}" -eq 0 ]; then
-        fail "Could not parse $(basename "$file") — no models loaded."
-        return 1
-    fi
-    ok "Model list: ${MODEL_LIST_ENGINE}/$(basename "$file") — ${#AI_MODEL_CATALOG[@]} models (host RAM ${ram} GB)."
 }
 
 # ---------- per-engine adapters ----------------------------------------------
@@ -773,8 +782,11 @@ installAiStackVerification() {
     else
         warn "Ollama:    not installed"
     fi
-    echo "${BOLD}  Frontend / tooling${RESET}"
-    command -v claude >/dev/null 2>&1 && ok "claude:    $(claude --version 2>/dev/null | head -1)" || warn "claude:    not installed"
+    echo "${BOLD}  Coding agents${RESET}"
+    pi_installed       && ok "Pi:        $(pi --version 2>/dev/null | head -1)"       || warn "Pi:        not installed"
+    opencode_installed && ok "OpenCode:  $(opencode --version 2>/dev/null | head -1)" || warn "OpenCode:  not installed"
+    claude_installed   && ok "Claude:    $(claude --version 2>/dev/null | head -1)"   || warn "Claude:    not installed (Ollama-only agent)"
+    echo "${BOLD}  Tooling${RESET}"
     command -v uv >/dev/null 2>&1     && ok "uv:        $(uv --version)"                           || warn "uv:        not installed"
 
     echo "${BOLD}  Models${RESET}"
@@ -823,7 +835,11 @@ installAiStack() {
     fi
     ok "Engines available: ${engines}"
 
-    installAiStackClaudeCli
+    # --- coding agents: what you type into (engine-compatibility enforced
+    #     later by launchInference.sh) ---
+    installAiStackPiCodingAgent
+    installAiStackOpenCodeCodingAgent
+    installAiStackClaudeCodingAgent
 
     # --- model layer: same order as the engines, each skipped if absent ------
     installAiStackLlamacppModels

@@ -14,7 +14,10 @@
 #   launchInferenceFreeResources     -> close memory-hungry desktop apps
 #   launchInferencePrerequisites     -> weights + KV cache must fit the GPU
 #   launchInferenceStart             -> start the engine's server, report usage
-#   launchInferenceClaudeCli         -> Claude CLI wired to the local endpoint
+#   launchInferenceAgentSelector     -> coding agent, filtered by engine
+#                                       compatibility (self-answering when
+#                                       only one option is valid)
+#   launchInferenceStartAgent        -> Pi / OpenCode / Claude on the endpoint
 #   launchInference                  -> wrapper: runs all of the above in order
 #
 # Usage:
@@ -67,6 +70,28 @@ mlxml_installed()    { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null
 ollama_installed()   { command -v ollama >/dev/null 2>&1; }
 
 lan_ip() { ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null; }
+
+# ---------- coding agents + engine compatibility -----------------------------
+# Pi and OpenCode drive any OpenAI-compatible endpoint, so they work with all
+# three engines. Claude Code speaks the Anthropic Messages API, which only
+# Ollama serves — offering it for llama.cpp or MLX would just fail.
+pi_installed()       { command -v pi >/dev/null 2>&1; }
+opencode_installed() { command -v opencode >/dev/null 2>&1; }
+claude_installed()   { command -v claude >/dev/null 2>&1; }
+
+agent_supports_engine() {   # $1 agent, $2 engine
+    case "$1" in
+        Pi|OpenCode) return 0 ;;
+        Claude)      [ "$2" = "Ollama" ] ;;
+        *)           return 1 ;;
+    esac
+}
+agent_reason() {            # why an agent cannot be used with an engine
+    case "$1" in
+        Claude) echo "needs the Anthropic API — only Ollama serves it" ;;
+        *)      echo "incompatible" ;;
+    esac
+}
 
 engine_port() {
     case "$1" in
@@ -296,6 +321,57 @@ launchInferenceNetworkSelector() {
     done
 }
 
+# ---------- 4b. coding agent selector ----------------------------------------
+# $1 = engine. Prints the chosen agent, or "none".
+# Only agents that are BOTH installed and compatible with this engine are
+# offered. Zero options -> says so; exactly one -> announces it and asks
+# nothing; several -> numeric menu.
+launchInferenceAgentSelector() {
+    local engine="${1:?}" all=() usable=() blocked=() a
+    pi_installed       && all+=("Pi")
+    opencode_installed && all+=("OpenCode")
+    claude_installed   && all+=("Claude")
+
+    for a in ${all[@]+"${all[@]}"}; do
+        if agent_supports_engine "$a" "$engine"; then usable+=("$a"); else blocked+=("$a"); fi
+    done
+
+    for a in ${blocked[@]+"${blocked[@]}"}; do
+        warn "${a} is installed but not usable with ${engine} — $(agent_reason "$a"). Not offered."
+    done
+
+    if [ "${#usable[@]}" -eq 0 ]; then
+        if [ "${#all[@]}" -eq 0 ]; then
+            warn "No coding agent installed — run ./install.sh to add Pi, OpenCode or Claude."
+        else
+            warn "No installed coding agent works with ${engine}."
+            warn "Pi or OpenCode would (they drive any OpenAI-compatible endpoint)."
+        fi
+        echo "none"; return 0
+    fi
+
+    if [ "${#usable[@]}" -eq 1 ]; then
+        ok "Only one coding agent works here: ${usable[0]} — using it."
+        echo "${usable[0]}"; return 0
+    fi
+
+    echo >&2
+    echo "${BOLD}Coding agents available for ${engine}:${RESET}" >&2
+    local i=1
+    for a in "${usable[@]}"; do printf "  %d) %s\n" "$i" "$a" >&2; i=$((i+1)); done
+    local def defnum=1 j=1 sel
+    def=$(tune_get "AGENT_${engine}")
+    for a in "${usable[@]}"; do [ "$a" = "$def" ] && defnum=$j; j=$((j+1)); done
+    while true; do
+        sel=$(ask_val "Select coding agent [1-${#usable[@]}]" "$defnum")
+        case "$sel" in *[!0-9]*|"") echo "Enter a number." >&2; continue ;; esac
+        [ "$sel" -ge 1 ] && [ "$sel" -le "${#usable[@]}" ] && break
+        echo "Out of range." >&2
+    done
+    tune_set "AGENT_${engine}" "${usable[$((sel-1))]}"
+    echo "${usable[$((sel-1))]}"
+}
+
 # ---------- 5. free resources -------------------------------------------------
 # Every open desktop app, biggest memory user first, "Close? [y/N]" each.
 # Never touches the app hosting this session, Finder, or the engines.
@@ -453,18 +529,41 @@ launchInferenceStart() {
     ok "Memory:   ${mem} GB    Processor: ${cpu} %"
 }
 
-# ---------- 8. Claude CLI -----------------------------------------------------
-# $1 engine, $2 model. Only Ollama speaks the Anthropic API that Claude needs.
-launchInferenceClaudeCli() {
-    local engine="${1:?}" model="${2:?}" endpoint="${LAUNCH_ENDPOINT:-}"
-    if [ "$engine" != "Ollama" ]; then
-        warn "${engine} serves an OpenAI-compatible API at ${endpoint}/v1 — Claude CLI needs"
-        warn "the Anthropic API, which only Ollama provides. Use this endpoint from an"
-        warn "OpenAI-compatible client, or launch Ollama for a Claude CLI session."
-        return 0
-    fi
-    command -v claude >/dev/null 2>&1 || { fail "claude CLI not installed (run ./install.sh)."; return 1; }
+# ---------- 8. start the coding agent ----------------------------------------
+# $1 agent, $2 engine, $3 model. Uses LAUNCH_ENDPOINT set by the start step.
 
+# the id the OpenAI-compatible endpoint actually advertises (llama-server and
+# mlx_lm.server name models their own way, so ask rather than assume)
+endpointModelId() {
+    curl -sf --max-time 8 "${LAUNCH_ENDPOINT}/v1/models" 2>/dev/null | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin).get("data",[])
+    print(d[0].get("id","") if d else "")
+except Exception: print("")' 2>/dev/null
+}
+
+launchInferenceStartAgent() {
+    local agent="${1:?}" engine="${2:?}" model="${3:?}" endpoint="${LAUNCH_ENDPOINT:-}"
+    [ "$agent" = "none" ] && {
+        info "No coding agent launched. The endpoint stays up:"
+        echo "    ${endpoint}" >&2
+        return 0
+    }
+    case "$agent" in
+        Claude)   launchInferenceAgentClaude   "$engine" "$model" ;;
+        Pi)       launchInferenceAgentPi       "$engine" "$model" ;;
+        OpenCode) launchInferenceAgentOpenCode "$engine" "$model" ;;
+    esac
+}
+
+# --- Claude Code: Anthropic API, Ollama only ---------------------------------
+launchInferenceAgentClaude() {
+    local engine="$1" model="$2" endpoint="${LAUNCH_ENDPOINT:-}"
+    if [ "$engine" != "Ollama" ]; then
+        fail "Claude Code needs the Anthropic API — ${engine} does not serve it."
+        return 1
+    fi
     local proj sflag="" answer n
     proj="$HOME/.claude/projects/$(pwd | sed 's|[/_.]|-|g')"
     if ls "$proj"/*.jsonl >/dev/null 2>&1; then
@@ -478,13 +577,11 @@ launchInferenceClaudeCli() {
             *) warn "Unknown answer — continuing latest."; sflag="--continue" ;;
         esac
     fi
-
-    # small local model for Claude Code's background (Haiku) tier, if present
     local haiku="$model" small
-    small=$(ollamaListInstalled | awk '{print}' | grep -E '(:1\.5b|:3b|:7b)$' | head -1)
+    small=$(ollamaListInstalled | grep -E '(:1\.5b|:3b|:7b)$' | head -1)
     [ -n "$small" ] && [ "$small" != "$model" ] && { haiku="$small"; ok "Background tier -> ${haiku}"; }
 
-    info "Launching Claude CLI in $(pwd) against ${model}..."
+    info "Launching Claude Code in $(pwd) against ${model}..."
     warn "Local models are weaker than hosted Claude — expect simpler agentic behaviour."
     ANTHROPIC_BASE_URL="$endpoint" \
     ANTHROPIC_AUTH_TOKEN="ollama" \
@@ -495,12 +592,65 @@ launchInferenceClaudeCli() {
     claude --model "$model" $sflag
 }
 
+# --- Pi: OpenAI-compatible, any engine ---------------------------------------
+# Config lives at ~/.pi/agent/local-models.json ({"url":..., "apiKey":...});
+# models are then picked inside Pi with /models.
+launchInferenceAgentPi() {
+    local engine="$1" model="$2" endpoint="${LAUNCH_ENDPOINT:-}" cfg="$HOME/.pi/agent/local-models.json"
+    mkdir -p "$(dirname "$cfg")"
+    if [ -f "$cfg" ] && ! grep -q "\"${endpoint}\"" "$cfg" 2>/dev/null; then
+        cp "$cfg" "${cfg}.bak" && warn "Existing Pi config backed up to ${cfg}.bak"
+    fi
+    printf '{\n  "url": "%s",\n  "apiKey": "local"\n}\n' "$endpoint" > "$cfg"
+    ok "Pi local-model config written: ${cfg} -> ${endpoint}"
+    pi list 2>/dev/null | grep -q pi-local-models || {
+        info "Adding local-model discovery to Pi..."
+        pi install npm:pi-local-models >/dev/null 2>&1 || warn "Run 'pi install npm:pi-local-models' if /models is empty."
+    }
+    info "Launching Pi in $(pwd). Pick the model inside Pi with: /models"
+    echo "    (serving ${model} via ${engine} at ${endpoint})" >&2
+    pi
+}
+
+# --- OpenCode: OpenAI-compatible, any engine ---------------------------------
+# Config at ~/.config/opencode/opencode.json — baseURL must sit inside
+# "options", and each model is keyed by the id the endpoint advertises.
+launchInferenceAgentOpenCode() {
+    local engine="$1" model="$2" endpoint="${LAUNCH_ENDPOINT:-}" cfg="$HOME/.config/opencode/opencode.json" mid
+    mid=$(endpointModelId); [ -z "$mid" ] && mid="$model"
+    mkdir -p "$(dirname "$cfg")"
+    [ -f "$cfg" ] && { cp "$cfg" "${cfg}.bak"; warn "Existing OpenCode config backed up to ${cfg}.bak"; }
+    python3 - "$cfg" "$endpoint" "$mid" "$engine" <<'PYEOF'
+import json, os, sys
+cfg, endpoint, mid, engine = sys.argv[1:5]
+data = {}
+if os.path.exists(cfg):
+    try:
+        data = json.load(open(cfg))
+    except Exception:
+        data = {}
+data.setdefault("$schema", "https://opencode.ai/config.json")
+prov = data.setdefault("provider", {})
+prov["local"] = {
+    "npm": "@ai-sdk/openai-compatible",
+    "name": f"Local ({engine})",
+    "options": {"baseURL": endpoint.rstrip("/") + "/v1", "apiKey": "local"},
+    "models": {mid: {"name": mid}},
+}
+json.dump(data, open(cfg, "w"), indent=2)
+print(cfg)
+PYEOF
+    ok "OpenCode config written: ${cfg} -> ${endpoint}/v1 (model ${mid})"
+    info "Launching OpenCode in $(pwd)..."
+    opencode --model "local/${mid}" 2>/dev/null || opencode
+}
+
 # ---------- wrapper -----------------------------------------------------------
 launchInference() {
     echo "${BOLD}=============================================================${RESET}" >&2
     echo "${BOLD} Local inference — engine, model, context, network${RESET}" >&2
     echo "${BOLD}=============================================================${RESET}" >&2
-    local engine model ctx bind
+    local engine model ctx bind agent
     engine=$(launchInferenceEngineSelector) || return 1
     model=$(launchInferenceModelSelector "$engine") || return 1
     ctx=$(launchInferenceContextSelector "$engine" "$model") || return 1
@@ -508,7 +658,8 @@ launchInference() {
     launchInferenceFreeResources
     launchInferencePrerequisites "$engine" "$model" "$ctx" || return 1
     launchInferenceStart "$engine" "$model" "$ctx" "$bind" || return 1
-    launchInferenceClaudeCli "$engine" "$model"
+    agent=$(launchInferenceAgentSelector "$engine")
+    launchInferenceStartAgent "$agent" "$engine" "$model"
 }
 
 if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then

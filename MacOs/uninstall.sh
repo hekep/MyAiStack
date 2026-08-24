@@ -7,15 +7,19 @@
 # foundations — the reverse of the installer's order. Steps carrying "Ollama"
 # in the name are engine-specific; the others apply to the stack as a whole.
 #
-#   uninstallAiStackOllamaModels   the Ollama models   <- GATE for everything below
-#   uninstallAiStackMlx            mlx-lm (+ HuggingFace cache)
-#   uninstallAiStackClaudeCli      Claude Code CLI
-#   uninstallAiStackOllamaEngine   Ollama itself (service, brew formula, .app)
-#   uninstallAiStackOllamaData     ~/.ollama — every model blob + registry keys
-#   uninstallAiStackUv             uv (foundation of mlx-lm)
-#   uninstallAiStackHomebrew       reports only — never removed
-#   uninstallAiStackStatus         what is left standing
-#   uninstallAiStack               wrapper — runs all of the above in order
+#   uninstallAiStackOllamaModels         the models   <- GATE for everything below
+#   --- coding agents: what you type into, they sit above the engines ---
+#   uninstallAiStackClaudeCodingAgent    Claude Code CLI
+#   uninstallAiStackOpenCodeCodingAgent  OpenCode
+#   uninstallAiStackPiCodingAgent        Pi
+#   --- engines and foundations ---
+#   uninstallAiStackMlx                  mlx-lm / MLX-LM engine (+ HF cache)
+#   uninstallAiStackOllamaEngine         Ollama itself (service, formula, .app)
+#   uninstallAiStackOllamaData           ~/.ollama — model blobs + registry keys
+#   uninstallAiStackUv                   uv (foundation of mlx-lm)
+#   uninstallAiStackHomebrew             reports only — never removed
+#   uninstallAiStackStatus               what is left standing
+#   uninstallAiStack                     wrapper — runs all of the above in order
 #
 # THE GATE: while any Ollama model is still installed, Ollama and everything
 # under it must stay, so the wrapper stops there. Remove every model to reach
@@ -166,9 +170,57 @@ uninstallAiStackMlx() {
     fi
 }
 
+# ---------- layer: coding agents ---------------------------------------------
+# The agents sit above the engines: they are what you type into. Removed before
+# any engine, so nothing is pulled out from under a working agent.
+
+uninstallAiStackPiCodingAgent() {
+    info "uninstallAiStackPiCodingAgent — Pi coding agent"
+    if ! command -v pi >/dev/null 2>&1; then
+        ok "Pi not installed — nothing to do."
+        return 0
+    fi
+    warn "Pi $(pi --version 2>/dev/null | head -1) at $(command -v pi)"
+    if ! ask_def "Uninstall Pi?" "n"; then
+        ok "Keeping Pi."
+        return 0
+    fi
+    if command -v npm >/dev/null 2>&1; then
+        npm uninstall -g @earendil-works/pi-coding-agent >/dev/null 2>&1 \
+            || npm uninstall -g @mariozechner/pi-coding-agent >/dev/null 2>&1
+    fi
+    command -v pi >/dev/null 2>&1 && fail "'pi' still resolves — remove it by hand." || ok "Pi removed."
+    if [ -d "$HOME/.pi" ]; then
+        warn "Pi config/plugins live in ~/.pi ($(sizeof "$HOME/.pi"))."
+        ask_def "Delete ~/.pi as well?" "n" && { rm -rf "$HOME/.pi" && ok "~/.pi deleted."; }
+    fi
+}
+
+uninstallAiStackOpenCodeCodingAgent() {
+    info "uninstallAiStackOpenCodeCodingAgent — OpenCode"
+    if ! command -v opencode >/dev/null 2>&1; then
+        ok "OpenCode not installed — nothing to do."
+        return 0
+    fi
+    warn "OpenCode $(opencode --version 2>/dev/null | head -1) at $(command -v opencode)"
+    if ! ask_def "Uninstall OpenCode?" "n"; then
+        ok "Keeping OpenCode."
+        return 0
+    fi
+    if brew list opencode >/dev/null 2>&1; then
+        brew uninstall opencode && ok "Brew formula removed." || fail "brew uninstall failed."
+    elif command -v npm >/dev/null 2>&1; then
+        npm uninstall -g opencode-ai && ok "npm package removed." || fail "npm uninstall failed."
+    fi
+    if [ -d "$HOME/.config/opencode" ]; then
+        warn "OpenCode config lives in ~/.config/opencode."
+        ask_def "Delete it as well?" "n" && { rm -rf "$HOME/.config/opencode" && ok "Config deleted."; }
+    fi
+}
+
 # ---------- layer: Claude Code CLI -------------------------------------------
-uninstallAiStackClaudeCli() {
-    info "uninstallAiStackClaudeCli — Claude Code CLI"
+uninstallAiStackClaudeCodingAgent() {
+    info "uninstallAiStackClaudeCodingAgent — Claude Code CLI"
     if ! command -v claude >/dev/null 2>&1; then
         ok "claude CLI not installed — nothing to do."
         return 0
@@ -319,8 +371,10 @@ uninstallAiStackStatus() {
                                       || ok   "Models:  removed"
     { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^mlx-lm'; } \
                                       && warn "mlx-lm:  still installed" || ok "mlx-lm:  removed"
-    command -v claude >/dev/null 2>&1 && warn "claude:  still installed ($(claude --version 2>/dev/null | head -1))" \
-                                      || ok   "claude:  removed"
+    command -v pi >/dev/null 2>&1       && warn "Pi:      still installed" || ok "Pi:      removed"
+    command -v opencode >/dev/null 2>&1 && warn "OpenCode: still installed" || ok "OpenCode: removed"
+    command -v claude >/dev/null 2>&1   && warn "claude:  still installed ($(claude --version 2>/dev/null | head -1))" \
+                                        || ok   "claude:  removed"
     command -v uv >/dev/null 2>&1     && warn "uv:      still installed" || ok "uv:      removed"
     command -v brew >/dev/null 2>&1   && ok   "brew:    kept (by design)"
     echo "    Free disk: $(free_gb) GB"
@@ -344,8 +398,12 @@ uninstallAiStack() {
         exit 0
     fi
 
+    # coding agents first — they sit above the engines
+    uninstallAiStackClaudeCodingAgent
+    uninstallAiStackOpenCodeCodingAgent
+    uninstallAiStackPiCodingAgent
+
     uninstallAiStackMlx
-    uninstallAiStackClaudeCli
     uninstallAiStackOllamaEngine
     uninstallAiStackOllamaData
     uninstallAiStackUv
