@@ -64,8 +64,19 @@ Each launcher refuses early rather than half-working:
    ! Install it:  installAiStackOpenCodeCodingAgent
    ! Ready to use with Llama.cpp right now: Pi
    ```
-2. **agent incompatible with the engine** → says which API is missing.
-3. **nothing serving the engine** → gives the `launchInferenceStart` line for a
+2. **unknown or uninstalled engine** → lists the valid names, and which of
+   them have models here.
+3. **model not installed for that engine** → lists the models that engine
+   actually has, so a typo is obvious, and names the download command:
+   ```
+   ✗ 'FubarModelNotAvailable' is not installed for Llama.cpp.
+   ! Llama.cpp models you do have:
+        bartowski/Qwen2.5-Coder-7B-Instruct-GGUF:Q8_0
+        lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q8_0
+   ! Download more with:  installAiStackLlamacppModels
+   ```
+4. **agent incompatible with the engine** → says which API is missing.
+5. **nothing serving the engine** → gives the `launchInferenceStart` line for a
    model you actually have. `LAUNCH_ENDPOINT` is only set by
    `launchInferenceStart`, so a launcher called on its own derives the endpoint
    and verifies it instead of writing an empty URL into the agent's config.

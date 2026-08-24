@@ -919,6 +919,8 @@ launchInferenceStart() {
         return 2
     fi
     local engine="${1:-}" model="${2:-}" ctx="${3:-}" bind="${4:-}" port
+    _requireEngine "$engine" || return 1
+    _requireModel "$engine" "$model" || return 1
     port=$(engine_port "$engine")
 
     if engine_up "$engine" "$bind"; then
@@ -1033,6 +1035,53 @@ launchInferenceStartAgent() {
     esac
 }
 
+# Refuse an engine name that is unknown or not installed, and say what to do.
+# Args: <engine>. Catches typos before they turn into confusing later failures.
+_requireEngine() {
+    local engine="${1:?}"
+    case "$engine" in
+        Llama.cpp|MLX-LM|Ollama) : ;;
+        *)  fail "Unknown engine '${engine}'."
+            warn "Valid engines:  Llama.cpp | MLX-LM | Ollama"
+            local w; w=$(enginesWithModels | tr '\n' ' ')
+            [ -n "$w" ] && warn "With models here: ${w% }"
+            return 1 ;;
+    esac
+    case "$engine" in
+        Llama.cpp) llamacpp_installed && return 0 ;;
+        MLX-LM)    mlxml_installed    && return 0 ;;
+        Ollama)    ollama_installed   && return 0 ;;
+    esac
+    fail "${engine} is not installed."
+    case "$engine" in
+        Llama.cpp) warn "Install it:  installAiStackLlamacppEngine" ;;
+        MLX-LM)    warn "Install it:  installAiStackMlxmlEngine" ;;
+        Ollama)    warn "Install it:  installAiStackOllamaEngine" ;;
+    esac
+    return 1
+}
+
+# Refuse a model that is not installed for this engine, and show what is.
+# Args: <engine> <model>. Lists the engine's actual models so a typo is obvious,
+# and names the download command when it has none at all.
+_requireModel() {
+    local engine="${1:?}" model="${2:?}" have
+    have=$(engineListInstalled "$engine" 2>/dev/null)
+    if [ -n "$have" ] && printf '%s\n' "$have" | grep -qxF "$model"; then
+        return 0
+    fi
+    fail "'${model}' is not installed for ${engine}."
+    if [ -n "$have" ]; then
+        warn "${engine} models you do have:"
+        printf '%s\n' "$have" | sed 's/^/     /' >&2
+        warn "Download more with:  $(_modelInstallerFor "$engine")"
+    else
+        warn "${engine} has no models at all yet — download one:"
+        warn "    $(_modelInstallerFor "$engine")"
+    fi
+    return 1
+}
+
 # The install function that provides one coding agent.
 # Args: <agent>. Prints the function name so guidance can be pasted.
 _agentInstallerFor() {
@@ -1116,6 +1165,8 @@ launchInferenceAgentClaude() {
     fi
     local engine="$1" model="$2" endpoint
     _requireAgent Claude "$engine" || return 1
+    _requireEngine "$engine" || return 1
+    _requireModel "$engine" "$model" || return 1
     if [ "$engine" != "Ollama" ]; then
         fail "Claude Code needs the Anthropic API — ${engine} does not serve it."
         return 1
@@ -1164,6 +1215,8 @@ launchInferenceAgentPi() {
     fi
     local engine="$1" model="$2" endpoint cfg="$HOME/.pi/agent/local-models.json"
     _requireAgent Pi "$engine" || return 1
+    _requireEngine "$engine" || return 1
+    _requireModel "$engine" "$model" || return 1
     endpoint=$(_resolveEndpointFor "$engine") || return 1
     mkdir -p "$(dirname "$cfg")"
     if [ -f "$cfg" ] && ! grep -q "\"${endpoint}\"" "$cfg" 2>/dev/null; then
@@ -1195,6 +1248,8 @@ launchInferenceAgentOpenCode() {
     fi
     local engine="$1" model="$2" endpoint cfg="$HOME/.config/opencode/opencode.json" mid
     _requireAgent OpenCode "$engine" || return 1
+    _requireEngine "$engine" || return 1
+    _requireModel "$engine" "$model" || return 1
     endpoint=$(_resolveEndpointFor "$engine") || return 1
     LAUNCH_ENDPOINT="$endpoint" mid=$(endpointModelId); [ -z "$mid" ] && mid="$model"
     mkdir -p "$(dirname "$cfg")"
