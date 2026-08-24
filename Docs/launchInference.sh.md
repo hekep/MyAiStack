@@ -66,6 +66,24 @@ Measured example on this 48 GB Mac (43 GB GPU limit, qwen3.6 at 23 GB): 32K,
 64K and 128K are offered; 256K+ are filtered out, and Ollama reports the model
 would allow 256K if there were memory for it.
 
+
+## Calling a step directly
+
+Every step is individually callable (see [installAliases.sh.md](installAliases.sh.md)). A step invoked without its
+arguments prints usage rather than a bash error, and the hints are resolved
+live — the engine line names what this machine actually has:
+
+```
+$ launchInferencePrerequisites
+ ✗  usage: launchInferencePrerequisites <engine> <model> <context-tokens>
+         engine  : Llama.cpp Ollama
+         model   : one of that engine's models — list: engineListInstalled <engine>
+         context : tokens, e.g. 32768 / 65536 / 131072
+         example : launchInferencePrerequisites Ollama qwen3.6:35b-a3b 32768
+```
+
+Return code is 2 for a usage error, distinct from a step that ran and failed.
+
 ## Why it is necessary
 
 - **Installing and serving are different jobs.** install.sh no longer starts

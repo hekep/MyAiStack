@@ -107,6 +107,28 @@ ollama_installed()   { command -v ollama >/dev/null 2>&1; }
 # Empty when offline, which the network selector treats as localhost-only.
 lan_ip() { ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null; }
 
+# Print a usage message for a step called with missing arguments, return 2.
+# Args: <signature> [detail lines...]. Every step is individually callable from
+# the shell, so a bare call has to explain itself instead of emitting a raw
+# bash "parameter null or not set".
+aiStackUsage() {
+    local sig="$1"; shift
+    fail "usage: ${sig}"
+    local l
+    for l in "$@"; do echo "         ${l}" >&2; done
+    return 2
+}
+
+# Help lines resolved live, so they name what THIS machine actually has rather
+# than a generic placeholder.
+_hintEngine() {
+    local e; e=$(enginesWithModels | tr '\n' ' ' | sed 's/ $//')
+    echo "engine  : ${e:-none installed — run ./install.sh}"
+}
+_hintModel() {
+    echo "model   : one of that engine's models — list: engineListInstalled <engine>"
+}
+
 # ---------- coding agents + engine compatibility -----------------------------
 # True when the Pi coding agent is on PATH.
 pi_installed()       { command -v pi >/dev/null 2>&1; }
@@ -343,7 +365,11 @@ launchInferenceEngineSelector() {
 # Args: <engine>. Lists sizes alongside names. When the engine has exactly one
 # model it is announced and used — a question with one answer is not a choice.
 launchInferenceModelSelector() {
-    local engine="${1:?engine required}" models=() m
+    if [ $# -lt 1 ]; then
+        aiStackUsage "launchInferenceModelSelector <engine>" "$(_hintEngine)" "example : launchInferenceModelSelector Ollama"
+        return 2
+    fi
+    local engine="${1:-}" models=() m
     while IFS= read -r m; do [ -n "$m" ] && models+=("$m"); done < <(engineListInstalled "$engine")
     if [ "${#models[@]}" -eq 0 ]; then
         fail "No models installed for ${engine} — run ./install.sh to download one."
@@ -382,7 +408,11 @@ launchInferenceModelSelector() {
 # sizes whose weights + estimated KV cache + runtime fit the GPU budget; for
 # Ollama it also hides anything above the model's own ceiling from /api/show.
 launchInferenceContextSelector() {
-    local engine="${1:?}" model="${2:?}" size_gb gpu_gb total_gb limit_mb
+    if [ $# -lt 2 ]; then
+        aiStackUsage "launchInferenceContextSelector <engine> <model>" "$(_hintEngine)" "$(_hintModel)" "example : launchInferenceContextSelector Ollama qwen3.6:35b-a3b"
+        return 2
+    fi
+    local engine="${1:-}" model="${2:-}" size_gb gpu_gb total_gb limit_mb
     size_gb=$(engineModelSizeGb "$engine" "$model"); [ "${size_gb:-0}" -lt 1 ] && size_gb=1
     total_gb=$(( $(sysctl -n hw.memsize) / 1073741824 ))
     limit_mb=$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)
@@ -455,7 +485,11 @@ except Exception: print(0)' 2>/dev/null)
 # serve over a socket and none of them authenticate. Refuses to bind a
 # non-private address, and warns that LAN mode is open to the whole network.
 launchInferenceNetworkSelector() {
-    local engine="${1:?}" ip def sel
+    if [ $# -lt 1 ]; then
+        aiStackUsage "launchInferenceNetworkSelector <engine>" "$(_hintEngine)" "prints  : the bind address (127.0.0.1 or your LAN IP)"
+        return 2
+    fi
+    local engine="${1:-}" ip def sel
     ip=$(lan_ip)
     echo >&2
     echo "${BOLD}Network exposure for ${engine}${RESET}" >&2
@@ -489,7 +523,11 @@ launchInferenceNetworkSelector() {
 # engine, naming incompatible ones with the reason. One valid option answers
 # itself; none leaves the server running and says what would have worked.
 launchInferenceAgentSelector() {
-    local engine="${1:?}" all=() usable=() blocked=() a
+    if [ $# -lt 1 ]; then
+        aiStackUsage "launchInferenceAgentSelector <engine>" "$(_hintEngine)" "prints  : Pi | OpenCode | Claude | none, filtered by compatibility"
+        return 2
+    fi
+    local engine="${1:-}" all=() usable=() blocked=() a
     pi_installed       && all+=("Pi")
     opencode_installed && all+=("OpenCode")
     claude_installed   && all+=("Claude")
@@ -672,7 +710,11 @@ launchInferenceFreeResources() {
 # against the GPU budget and fails with the exact sysctl to raise the limit.
 # Runs before anything is loaded, because discovering it afterwards means swap.
 launchInferencePrerequisites() {
-    local engine="${1:?}" model="${2:?}" ctx="${3:?}" size_gb kv need gpu_gb total_gb limit_mb avail
+    if [ $# -lt 3 ]; then
+        aiStackUsage "launchInferencePrerequisites <engine> <model> <context-tokens>" "$(_hintEngine)" "$(_hintModel)" "context : tokens, e.g. 32768 / 65536 / 131072" "example : launchInferencePrerequisites Ollama qwen3.6:35b-a3b 32768"
+        return 2
+    fi
+    local engine="${1:-}" model="${2:-}" ctx="${3:-}" size_gb kv need gpu_gb total_gb limit_mb avail
     size_gb=$(engineModelSizeGb "$engine" "$model"); [ "${size_gb:-0}" -lt 1 ] && size_gb=1
     total_gb=$(( $(sysctl -n hw.memsize) / 1073741824 ))
     limit_mb=$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)
@@ -700,7 +742,11 @@ launchInferencePrerequisites() {
 # running, waits for real readiness, then reports endpoint, memory and CPU.
 # Sets LAUNCH_ENDPOINT, which the agent step consumes.
 launchInferenceStart() {
-    local engine="${1:?}" model="${2:?}" ctx="${3:?}" bind="${4:?}" port
+    if [ $# -lt 4 ]; then
+        aiStackUsage "launchInferenceStart <engine> <model> <context-tokens> <bind-address>" "$(_hintEngine)" "$(_hintModel)" "context : tokens, e.g. 32768" "bind    : 127.0.0.1 (local) or this Mac's LAN IP" "example : launchInferenceStart Ollama qwen3.6:35b-a3b 32768 127.0.0.1"
+        return 2
+    fi
+    local engine="${1:-}" model="${2:-}" ctx="${3:-}" bind="${4:-}" port
     port=$(engine_port "$engine")
 
     if engine_up "$engine" "$bind"; then
@@ -793,7 +839,11 @@ except Exception: print("")' 2>/dev/null
 # Args: <agent> <engine> <model>. Dispatches to the per-agent launcher, or
 # prints the endpoint and stops when the agent is "none".
 launchInferenceStartAgent() {
-    local agent="${1:?}" engine="${2:?}" model="${3:?}" endpoint="${LAUNCH_ENDPOINT:-}"
+    if [ $# -lt 3 ]; then
+        aiStackUsage "launchInferenceStartAgent <agent> <engine> <model>" "agent   : Pi | OpenCode | Claude | none" "$(_hintEngine)" "$(_hintModel)" "note    : needs LAUNCH_ENDPOINT set by launchInferenceStart"
+        return 2
+    fi
+    local agent="${1:-}" engine="${2:-}" model="${3:-}" endpoint="${LAUNCH_ENDPOINT:-}"
     [ "$agent" = "none" ] && {
         info "No coding agent launched. The endpoint stays up:"
         echo "    ${endpoint}" >&2

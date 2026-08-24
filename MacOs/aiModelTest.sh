@@ -110,7 +110,11 @@ aiModelTestModelSelector() { launchInferenceModelSelector "$1"; }
 # model at server start, so a server on a different model is restarted.
 # Sets TEST_ENDPOINT, and TEST_SERVER_PID when this script started the server.
 aiModelTestEnsureServing() {
-    local engine="${1:?}" model="${2:?}" host="127.0.0.1" port t=0
+    if [ $# -lt 2 ]; then
+        aiStackUsage "aiModelTestEnsureServing <engine> <model>" "$(_hintEngine)" "$(_hintModel)" "effect  : starts or re-points the engine; sets TEST_ENDPOINT"
+        return 2
+    fi
+    local engine="${1:-}" model="${2:-}" host="127.0.0.1" port t=0
     port=$(engine_port "$engine")
     TEST_ENDPOINT="http://${host}:${port}"
     TEST_SERVER_PID=""
@@ -199,7 +203,11 @@ except Exception: print("")' 2>/dev/null
 # Args: <engine>. Sets R_server. A failure here stops the suite, since every
 # later test would just repeat the same connection error.
 aiModelTestServer() {
-    local engine="${1:?}"
+    if [ $# -lt 1 ]; then
+        aiStackUsage "aiModelTestServer <engine>" "$(_hintEngine)" "note    : call aiModelTestEnsureServing first — it sets TEST_ENDPOINT"
+        return 2
+    fi
+    local engine="${1:-}"
     info "Test 1 — ${engine} reachable at ${TEST_ENDPOINT}"
     if engine_up "$engine" "$(echo "$TEST_ENDPOINT" | sed 's|http://||; s|:.*||')"; then
         ok "${engine} is serving."
@@ -217,7 +225,11 @@ aiModelTestServer() {
 # warmup request first so model-load time is not counted as generation time —
 # that is what makes numbers from different engines comparable.
 aiModelTestGenerate() {
-    local engine="${1:?}" model="${2:?}" served payload resp t0 t1
+    if [ $# -lt 2 ]; then
+        aiStackUsage "aiModelTestGenerate <engine> <model>" "$(_hintEngine)" "$(_hintModel)" "prompt  : override with PROMPT=... ; sets G_TOKENS/G_TIME/G_TPS"
+        return 2
+    fi
+    local engine="${1:-}" model="${2:-}" served payload resp t0 t1
     served=$(aiModelTestServedId); [ -z "$served" ] && served="$model"
     info "Test 2 — generation with PROMPT: \"${PROMPT}\""
 
@@ -277,7 +289,11 @@ PYEOF
 # serve OpenAI-compatible APIs by design, so this is a capability note, not a
 # defect. Uses a generous token budget — thinking models reason before replying.
 aiModelTestAnthropic() {
-    local engine="${1:?}" model="${2:?}" resp
+    if [ $# -lt 2 ]; then
+        aiStackUsage "aiModelTestAnthropic <engine> <model>" "$(_hintEngine)" "$(_hintModel)" "note    : only meaningful for Ollama; SKIPs on the others"
+        return 2
+    fi
+    local engine="${1:-}" model="${2:-}" resp
     if [ "$engine" != "Ollama" ]; then
         info "Test 3 — Anthropic endpoint: not applicable to ${engine} (OpenAI-compatible only)"
         warn "Claude Code cannot use ${engine}; Pi and OpenCode can."
@@ -321,7 +337,11 @@ PYEOF
 # PASS first time, FLAKY only on the retry, FAIL after two misses. Uses a fixed
 # weather prompt so an unrelated PROMPT cannot make a correct answer look wrong.
 aiModelTestToolCall() {
-    local engine="${1:?}" model="${2:?}" served payload resp attempt
+    if [ $# -lt 2 ]; then
+        aiStackUsage "aiModelTestToolCall <engine> <model>" "$(_hintEngine)" "$(_hintModel)" "result  : sets R_toolcall to PASS / FLAKY / FAIL"
+        return 2
+    fi
+    local engine="${1:-}" model="${2:-}" served payload resp attempt
     served=$(aiModelTestServedId); [ -z "$served" ] && served="$model"
     info "Test 4 — tool calling: get_weather + fixed weather prompt"
     payload=$(python3 - "$served" <<PYEOF
@@ -389,7 +409,11 @@ PYEOF
 # MLX-LM cannot report it at all, so that is WARN rather than a verdict.
 # Under 32k an agent's system prompt alone overflows — the classic silent fault.
 aiModelTestContext() {
-    local engine="${1:?}" model="${2:?}" ctx=0 host
+    if [ $# -lt 2 ]; then
+        aiStackUsage "aiModelTestContext <engine> <model>" "$(_hintEngine)" "$(_hintModel)" "result  : sets R_context; MLX-LM cannot report it (WARN)"
+        return 2
+    fi
+    local engine="${1:-}" model="${2:-}" ctx=0 host
     host=$(echo "$TEST_ENDPOINT" | sed 's|http://||; s|:.*||')
     info "Test 5 — served context window (agents want >= 32k)"
     case "$engine" in
@@ -434,7 +458,11 @@ except Exception: print(0)' 2>/dev/null)
 # Args: <engine> <model>. Split out from the wrapper so a sweep can reuse the
 # suite without re-asking any of the selection questions.
 aiModelTestRun() {
-    local engine="${1:?}" model="${2:?}"
+    if [ $# -lt 2 ]; then
+        aiStackUsage "aiModelTestRun <engine> <model>" "$(_hintEngine)" "$(_hintModel)" "runs    : tests 2-5; serve the model first (aiModelTestEnsureServing)"
+        return 2
+    fi
+    local engine="${1:-}" model="${2:-}"
     aiModelTestGenerate  "$engine" "$model"
     aiModelTestAnthropic "$engine" "$model"
     aiModelTestToolCall  "$engine" "$model"
