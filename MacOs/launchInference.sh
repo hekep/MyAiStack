@@ -1018,7 +1018,7 @@ launchInferenceStartAgent() {
     local agent="${1:-}" engine="${2:-}" model="${3:-}" endpoint="${LAUNCH_ENDPOINT:-}"
     [ "$agent" = "none" ] && {
         info "No coding agent launched. The endpoint stays up:"
-        echo "    ${endpoint}" >&2
+        echo "    ${endpoint:-$(_resolveEndpointFor "$engine" 2>/dev/null || echo "(nothing serving ${engine})")}" >&2
         return 0
     }
     case "$agent" in
@@ -1026,6 +1026,34 @@ launchInferenceStartAgent() {
         Pi)       launchInferenceAgentPi       "$engine" "$model" ;;
         OpenCode) launchInferenceAgentOpenCode "$engine" "$model" ;;
     esac
+}
+
+# Resolve the endpoint to hand to a coding agent, and prove something is
+# actually serving it. Args: <engine>. Prints the URL, or fails with the exact
+# command that starts the engine.
+# LAUNCH_ENDPOINT is only set by launchInferenceStart, so an agent launcher
+# called on its own would otherwise write an empty URL into the agent's config
+# — which looks like it worked and then reports "no models discovered".
+_resolveEndpointFor() {
+    local engine="${1:?}" ep host m
+    ep="${LAUNCH_ENDPOINT:-}"
+    [ -z "$ep" ] && ep="http://127.0.0.1:$(engine_port "$engine")"
+    host=$(printf '%s' "$ep" | sed 's|http://||; s|:.*||')
+    if engine_up "$engine" "$host"; then
+        printf '%s' "$ep"
+        return 0
+    fi
+    fail "Nothing is serving ${engine} at ${ep} — the agent would have no model."
+    m=$(engineListInstalled "$engine" 2>/dev/null | head -1)
+    if [ -n "$m" ]; then
+        warn "Start it first:"
+        warn "    launchInferenceStart ${engine} ${m} 32768 127.0.0.1"
+        warn "or run the whole flow:  launchInference"
+    else
+        warn "No ${engine} models installed either — download one first:"
+        warn "    $(_modelInstallerFor "$engine")"
+    fi
+    return 1
 }
 
 # --- Claude Code: Anthropic API, Ollama only ---------------------------------
@@ -1041,11 +1069,12 @@ launchInferenceAgentClaude() {
             "$(_hintExamples launchInferenceAgentClaude engine-model Claude)"
         return 2
     fi
-    local engine="$1" model="$2" endpoint="${LAUNCH_ENDPOINT:-}"
+    local engine="$1" model="$2" endpoint
     if [ "$engine" != "Ollama" ]; then
         fail "Claude Code needs the Anthropic API — ${engine} does not serve it."
         return 1
     fi
+    endpoint=$(_resolveEndpointFor "$engine") || return 1
     local proj sflag="" answer n
     proj="$HOME/.claude/projects/$(pwd | sed 's|[/_.]|-|g')"
     if ls "$proj"/*.jsonl >/dev/null 2>&1; then
@@ -1087,7 +1116,8 @@ launchInferenceAgentPi() {
             "$(_hintExamples launchInferenceAgentPi engine-model Pi)"
         return 2
     fi
-    local engine="$1" model="$2" endpoint="${LAUNCH_ENDPOINT:-}" cfg="$HOME/.pi/agent/local-models.json"
+    local engine="$1" model="$2" endpoint cfg="$HOME/.pi/agent/local-models.json"
+    endpoint=$(_resolveEndpointFor "$engine") || return 1
     mkdir -p "$(dirname "$cfg")"
     if [ -f "$cfg" ] && ! grep -q "\"${endpoint}\"" "$cfg" 2>/dev/null; then
         cp "$cfg" "${cfg}.bak" && warn "Existing Pi config backed up to ${cfg}.bak"
@@ -1116,8 +1146,9 @@ launchInferenceAgentOpenCode() {
             "$(_hintExamples launchInferenceAgentOpenCode engine-model OpenCode)"
         return 2
     fi
-    local engine="$1" model="$2" endpoint="${LAUNCH_ENDPOINT:-}" cfg="$HOME/.config/opencode/opencode.json" mid
-    mid=$(endpointModelId); [ -z "$mid" ] && mid="$model"
+    local engine="$1" model="$2" endpoint cfg="$HOME/.config/opencode/opencode.json" mid
+    endpoint=$(_resolveEndpointFor "$engine") || return 1
+    LAUNCH_ENDPOINT="$endpoint" mid=$(endpointModelId); [ -z "$mid" ] && mid="$model"
     mkdir -p "$(dirname "$cfg")"
     [ -f "$cfg" ] && { cp "$cfg" "${cfg}.bak"; warn "Existing OpenCode config backed up to ${cfg}.bak"; }
     python3 - "$cfg" "$endpoint" "$mid" "$engine" <<'PYEOF'
