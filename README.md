@@ -21,7 +21,7 @@ Nothing runs without asking, and nothing is installed silently.
 | **Engines** | llama.cpp *(default)*, MLX-LM, Ollama | At least one required. llama.cpp and MLX reach the `Q5_K_M`/`Q6_K`/6-bit quants Ollama's registry does not carry |
 | **Coding agents** | Pi *(default)*, OpenCode, Claude Code | Pi and OpenCode drive any engine; Claude Code needs Ollama, because it speaks the Anthropic API |
 | **Models** | curated top-20 per RAM tier, per engine | [ModelLists/](ModelLists/) — data, not code, with sizes read from upstream manifests |
-| **Monitoring** *(optional)* | macmon *(default)*, Anubis, LiteLLM proxy | macOS-specific: live CPU/GPU/ANE usage, scraper-bot protection, request logging with OpenTelemetry |
+| **Monitoring** *(all optional)* | macmon, Anubis OSS, LiteLLM proxy | macOS-specific: live CPU/GPU/ANE usage, GUI benchmarking of local models, request logging with OpenTelemetry |
 
 ## The scripts
 

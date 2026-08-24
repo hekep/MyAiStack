@@ -28,7 +28,7 @@ depends on it) → **coding agents** (they sit above the engines) → **engines*
 |---|---|---|
 | `uninstallAiStackOllamaModels` | the models — **gate** | Numbered menu mirroring the installer's download menu: models with sizes and current free disk, pick by number to remove (freed GB reported), menu re-renders, until none remain (→ descend) or **N** cancels the whole uninstall. Starts the Ollama server temporarily if needed, stops it again on every exit path. |
 | `uninstallAiStackMacmonMonitoring` | macmon | Default **No** — small, useful beside any workload, and unrelated to whether you keep the models |
-| `uninstallAiStackAnubisMonitoring` | Anubis | Default **No**, and warns that removing it stops protection of any service it currently fronts |
+| `uninstallAiStackAnubisMonitoring` | Anubis OSS | Default **No**. Removes the cask, then offers brew's `--zap` separately — that clears your saved benchmark history, which is not something an uninstall should take by default |
 | `uninstallAiStackLitellmMonitoring` | LiteLLM proxy | Default **No**; offers `~/.litellm` separately, since it can hold provider keys |
 | `uninstallAiStackClaudeCodingAgent` | Claude Code CLI | Default **No** — it may be running this session. `~/.claude` (sessions, settings, memory) is never touched |
 | `uninstallAiStackOpenCodeCodingAgent` | OpenCode | Brew or npm, whichever installed it; offers `~/.config/opencode` separately |

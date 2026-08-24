@@ -36,8 +36,8 @@ a Debian port will want different tools entirely.
 | **`installAiStackLlamacppModels`** | GGUF files → `~/Models/llama.cpp` | Skipped unless llama.cpp is installed |
 | **`installAiStackMlxmlModels`** | HF repos → HuggingFace cache | Skipped unless MLX-LM is installed |
 | **`installAiStackOllamaModels`** | registry tags → `~/.ollama` | Skipped unless Ollama is installed. Prunes failed-download leftovers first |
-| **`installAiStackMacmonMonitoring`** | **macmon** — brew | **Default YES.** Sudoless CPU/GPU/ANE and memory monitoring for Apple Silicon — the one tool here that watches what inference actually costs |
-| **`installAiStackAnubisMonitoring`** | **Anubis** — brew | **Default no.** A scraper-bot firewall for a service you *host*; it does **not** monitor local models, and the prompt says so |
+| **`installAiStackMacmonMonitoring`** | **macmon** — brew | **Default no.** Sudoless CPU/GPU/ANE and memory monitoring for Apple Silicon — useful beside a running model, but nothing in the stack needs it |
+| **`installAiStackAnubisMonitoring`** | **Anubis OSS** — brew cask (`uncsoft/anubis`) | **Default no.** Native macOS app that benchmarks and compares local models over any OpenAI-compatible endpoint, with hardware telemetry per run — the GUI counterpart to `aiModelTest.sh`. macOS 15+. Detected by its app bundle, not `command -v`; the cask sets `auto_updates`, so the update check uses `--greedy` |
 | **`installAiStackLitellmMonitoring`** | **LiteLLM proxy** — uv | **Default no.** OpenAI-compatible proxy in front of the engines: logs every request and exports OpenTelemetry traces |
 | `installAiStackVerification` | Status summary: every engine, the frontend, and the models installed per engine | Pure read/report |
 | `installAiStack` | **Wrapper** — see order below | — |
@@ -49,7 +49,7 @@ sanity → disk gate → Homebrew
       → llama.cpp engine → MLX-LM engine → Ollama engine      (at least one!)
       → Pi → OpenCode → Claude Code                     (coding agents)
       → llama.cpp models → MLX-LM models → Ollama models
-      → macmon → Anubis → LiteLLM                      (monitoring, optional)
+      → macmon → Anubis OSS → LiteLLM                  (monitoring, all optional)
       → verification
 ```
 

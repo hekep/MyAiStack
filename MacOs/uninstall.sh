@@ -10,7 +10,7 @@
 #   uninstallAiStackOllamaModels         the models   <- GATE for everything below
 #   --- monitoring: observational, nothing depends on it (macOS-specific) ---
 #   uninstallAiStackMacmonMonitoring     macmon
-#   uninstallAiStackAnubisMonitoring     Anubis
+#   uninstallAiStackAnubisMonitoring     Anubis OSS
 #   uninstallAiStackLitellmMonitoring    LiteLLM proxy
 #   --- coding agents: what you type into, they sit above the engines ---
 #   uninstallAiStackClaudeCodingAgent    Claude Code CLI
@@ -222,21 +222,37 @@ uninstallAiStackMacmonMonitoring() {
     fi
 }
 
-# Remove Anubis (scraper-bot firewall).
-# Default No. If it is fronting a service you host, removing it stops that
-# protection, which has nothing to do with tearing down the local AI stack.
+# Remove Anubis OSS (the local-LLM benchmarking app).
+# Default No. Offers brew's --zap afterwards, which also clears the app's
+# support files and — importantly — your saved benchmark history, so that is a
+# separate question rather than part of the uninstall.
 uninstallAiStackAnubisMonitoring() {
-    info "uninstallAiStackAnubisMonitoring — Anubis"
-    if ! command -v anubis >/dev/null 2>&1; then
-        ok "Anubis not installed — nothing to do."
+    info "uninstallAiStackAnubisMonitoring — Anubis OSS"
+    local app="/Applications/Anubis OSS.app"
+    if [ ! -d "$app" ] && ! brew list --cask anubis-oss >/dev/null 2>&1; then
+        ok "Anubis OSS not installed — nothing to do."
         return 0
     fi
-    warn "Anubis $(anubis --version 2>/dev/null | head -1) at $(command -v anubis)"
-    warn "If it is protecting a hosted service, removing it stops that protection."
-    if ask_def "Uninstall Anubis?" "n"; then
-        brew uninstall anubis && ok "Anubis removed." || fail "brew uninstall failed."
+    warn "Anubis OSS at ${app}"
+    if ! ask_def "Uninstall Anubis OSS?" "n"; then
+        ok "Keeping Anubis OSS."
+        return 0
+    fi
+    if brew list --cask anubis-oss >/dev/null 2>&1; then
+        brew uninstall --cask anubis-oss && ok "Anubis OSS removed." || fail "brew uninstall failed."
     else
-        ok "Keeping Anubis."
+        rm -rf "$app" && ok "Removed ${app}."
+    fi
+    warn "Its data (benchmark history, preferences) lives in ~/Library/... com.uncsoft.anubisoss"
+    if ask_def "Also delete that data (brew --zap)?" "n"; then
+        brew uninstall --cask --zap anubis-oss >/dev/null 2>&1 \
+            || rm -rf ~/Library/Application\ Support/com.uncsoft.anubisoss \
+                      ~/Library/Caches/com.uncsoft.anubisoss \
+                      ~/Library/Preferences/com.uncsoft.anubisoss.plist \
+                      ~/Library/Saved\ Application\ State/com.uncsoft.anubisoss.savedState
+        ok "Anubis OSS data deleted."
+    else
+        ok "Keeping your benchmark history."
     fi
 }
 
@@ -489,7 +505,7 @@ uninstallAiStackStatus() {
     { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^mlx-lm'; } \
                                       && warn "mlx-lm:  still installed" || ok "mlx-lm:  removed"
     command -v macmon >/dev/null 2>&1   && warn "macmon:  still installed" || ok "macmon:  removed"
-    command -v anubis >/dev/null 2>&1   && warn "Anubis:  still installed" || ok "Anubis:  removed"
+    [ -d "/Applications/Anubis OSS.app" ] && warn "Anubis:  still installed" || ok "Anubis:  removed"
     command -v pi >/dev/null 2>&1       && warn "Pi:      still installed" || ok "Pi:      removed"
     command -v opencode >/dev/null 2>&1 && warn "OpenCode: still installed" || ok "OpenCode: removed"
     command -v claude >/dev/null 2>&1   && warn "claude:  still installed ($(claude --version 2>/dev/null | head -1))" \

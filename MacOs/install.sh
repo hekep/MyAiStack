@@ -28,8 +28,8 @@
 #   installAiStackMlxmlModels     HF repos   -> HuggingFace cache
 #   installAiStackOllamaModels    registry tags -> ~/.ollama
 #   --- monitoring (optional, macOS-specific) ---
-#   installAiStackMacmonMonitoring     macmon   — default YES; CPU/GPU/ANE + memory
-#   installAiStackAnubisMonitoring     Anubis   — default no;  scraper-bot firewall
+#   installAiStackMacmonMonitoring     macmon     — default no; CPU/GPU/ANE + memory
+#   installAiStackAnubisMonitoring     Anubis OSS — default no; LLM benchmarking app
 #   installAiStackLitellmMonitoring    LiteLLM  — default no;  proxy logging / OTel
 #   installAiStackVerification    status summary
 #   installAiStack                wrapper — runs all of the above in order
@@ -947,8 +947,10 @@ installAiStackOllamaModels() {
 
 # True when macmon is on PATH.
 macmon_installed()  { command -v macmon >/dev/null 2>&1; }
-# True when anubis is on PATH.
-anubis_installed()  { command -v anubis >/dev/null 2>&1; }
+# True when Anubis OSS is installed. It is a macOS app, not a CLI, so the check
+# is the bundle (or the cask record) — "command -v anubis" would never find it.
+ANUBIS_APP="/Applications/Anubis OSS.app"
+anubis_installed()  { [ -d "$ANUBIS_APP" ] || brew list --cask anubis-oss >/dev/null 2>&1; }
 # True when the litellm CLI is available (installed as a uv tool).
 litellm_installed() { command -v litellm >/dev/null 2>&1 || { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^litellm'; }; }
 
@@ -988,23 +990,43 @@ _aiStackMonitorBrew() {
     fi
 }
 
-# Monitoring step, default YES: macmon — sudoless CPU/GPU/ANE and memory
-# monitoring for Apple Silicon. The one tool here that watches the thing this
-# stack actually stresses, so it is the recommended default.
+# Monitoring step, default no: macmon — sudoless CPU/GPU/ANE and memory
+# monitoring for Apple Silicon. Useful beside a running model, but nothing in
+# the stack needs it, so it is offered rather than recommended.
 installAiStackMacmonMonitoring() {
     info "installAiStackMacmonMonitoring — macmon (Apple Silicon performance monitor)"
-    _aiStackMonitorBrew macmon "macmon" "y" \
+    _aiStackMonitorBrew macmon "macmon" "n" \
         "Live CPU/GPU/ANE power and memory — run it beside a model to see what inference costs."
 }
 
-# Monitoring step, default no: Anubis — a scraper-bot firewall.
-# Note it does NOT monitor local inference; it protects a service you host from
-# AI crawlers. Included because it is part of the AI-adjacent toolchain, and
-# described honestly so it is not installed under a wrong assumption.
+# Monitoring step, default no: Anubis OSS — a native macOS app that benchmarks
+# and compares local models over any OpenAI-compatible endpoint, with hardware
+# telemetry recorded alongside each run. The GUI counterpart to aiModelTest.sh,
+# so it works against every engine this stack installs.
 installAiStackAnubisMonitoring() {
-    info "installAiStackAnubisMonitoring — Anubis (scraper-bot protection)"
-    _aiStackMonitorBrew anubis "Anubis" "n" \
-        "Protects a hosted service from AI scrapers. It does NOT monitor your local models."
+    info "installAiStackAnubisMonitoring — Anubis OSS (local LLM benchmarking)"
+    command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew."; return 1; }
+    if anubis_installed; then
+        ok "Anubis OSS present: ${ANUBIS_APP}"
+        # the cask sets auto_updates, so the app updates itself and plain
+        # "brew outdated" stays silent by design — --greedy is what sees it
+        if [ -n "$(brew outdated --cask --greedy anubis-oss 2>/dev/null)" ]; then
+            warn "A newer Anubis OSS is available (the app can also update itself)."
+            ask_def "Upgrade Anubis OSS via brew now?" "y" && brew upgrade --cask --greedy anubis-oss
+        else
+            ok "Already the latest version."
+        fi
+        return 0
+    fi
+    echo "    Benchmarks and compares local models over any OpenAI-compatible endpoint"
+    echo "    (Ollama, llama.cpp, MLX...), with hardware telemetry per run. Needs macOS 15+."
+    if ask_def "Install Anubis OSS?" "n"; then
+        brew install -y --cask uncsoft/anubis/anubis-oss \
+            && ok "Anubis OSS installed -> ${ANUBIS_APP}" \
+            || { fail "brew install --cask uncsoft/anubis/anubis-oss failed."; return 1; }
+    else
+        warn "Skipping Anubis OSS."
+    fi
 }
 
 # Monitoring step, default no: LiteLLM — an OpenAI-compatible proxy that logs
@@ -1064,7 +1086,7 @@ installAiStackVerification() {
     claude_installed   && ok "Claude:    $(claude --version 2>/dev/null | head -1)"   || warn "Claude:    not installed (Ollama-only agent)"
     echo "${BOLD}  Monitoring${RESET}"
     macmon_installed  && ok "macmon:    $(macmon --version 2>/dev/null | head -1)" || warn "macmon:    not installed"
-    anubis_installed  && ok "Anubis:    $(anubis --version 2>/dev/null | head -1)" || warn "Anubis:    not installed"
+    anubis_installed  && ok "Anubis OSS: installed"                                 || warn "Anubis OSS: not installed"
     litellm_installed && ok "LiteLLM:   installed"                                 || warn "LiteLLM:   not installed"
     echo "${BOLD}  Tooling${RESET}"
     command -v uv >/dev/null 2>&1     && ok "uv:        $(uv --version)"                           || warn "uv:        not installed"
