@@ -28,11 +28,25 @@ BOLD=$(tput bold 2>/dev/null || true); RESET=$(tput sgr0 2>/dev/null || true)
 GREEN=$(tput setaf 2 2>/dev/null || true); YELLOW=$(tput setaf 3 2>/dev/null || true)
 RED=$(tput setaf 1 2>/dev/null || true); BLUE=$(tput setaf 4 2>/dev/null || true)
 
+# Print a progress heading ("==> ...").
+# All narration goes through these four helpers so colour handling and
+# stream choice stay in one place.
 info()  { echo "${BLUE}==>${RESET} $*"; }
+# Print a success line (green check).
+# Used for both "did it" and "already true", since a re-run should read the
+# same whether the work happened now or earlier.
 ok()    { echo "${GREEN} ✓ ${RESET} $*"; }
+# Print a caution line (yellow !) — something worth reading, not a failure.
+# Also used for "skipped by your choice", so the transcript records decisions.
 warn()  { echo "${YELLOW} ! ${RESET} $*"; }
+# Print an error line (red x).
+# Only for things that did not work; a declined question is a warn, not a fail.
 fail()  { echo "${RED} ✗ ${RESET} $*"; }
 
+# Ask a yes/no question on the terminal and loop until the answer is clear.
+# Reads from /dev/tty so piping stdout does not break the prompt.
+# Returns 0 for yes, 1 for no; no Enter-default, since every step here deletes
+# something.
 ask() {
     local answer
     while true; do
@@ -46,12 +60,21 @@ ask() {
     done
 }
 
+# Human-readable size of a file or directory ('du -sh').
+# Args: <path>. Empty output for a missing path, so prompts stay readable.
 sizeof() { du -sh "$1" 2>/dev/null | cut -f1; }
 
+# Free space on the data volume in KB, as an integer.
+# The before/after probe for gain(); df reflects what was really released.
 free_kb() { df -k /System/Volumes/Data | awk 'NR==2 {print $4}'; }
+# Free space on the data volume, human-readable (e.g. "114Gi").
+# Display only — free_kb() is what the arithmetic uses.
 free_h()  { df -h /System/Volumes/Data | awk 'NR==2 {print $4}'; }
 START_KB=$(free_kb)
 
+# Report how much disk a step actually freed.
+# Args: <free_kb before the step>. Prints GB / MB / negligible and the new
+# free total. Keychain steps legitimately report ~0: they hold no disk space.
 gain() {
     local d=$(( $(free_kb) - $1 ))
     [ "$d" -lt 0 ] && d=0

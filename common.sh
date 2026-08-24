@@ -13,8 +13,10 @@
 # clear message instead of half-running.
 
 # ---------- OS detection ------------------------------------------------------
-# Prints the OS-specific folder name on stdout.
-# Returns 1 (with a message on stderr) when the OS is unsupported.
+# Map the running OS to the folder holding its implementations.
+# Prints "MacOs" on Darwin and "Debian" on Debian/Ubuntu (matched via ID and
+# ID_LIKE in /etc/os-release). Anything else — Fedora/RHEL, Windows — is a hard
+# stop: prints why on stderr and returns 1 rather than half-running.
 detectOsFolder() {
     local sys ids
     sys=$(uname -s)
@@ -43,8 +45,11 @@ detectOsFolder() {
 }
 
 # ---------- dispatch ----------------------------------------------------------
-# os_exec <repo-root> <script-name> [args...]
-# Replaces the current process with the OS-specific implementation.
+# Dispatch to the OS-specific implementation of a script.
+# Args: <repo-root> <script-name> [args...] — replaces this process with
+# <repo-root>/<OsFolder>/<script-name>, forwarding every argument.
+# Exits 1 with a clear message when the OS is unsupported or that folder has no
+# such script yet (e.g. running install.sh on Debian before it is ported).
 os_exec() {
     local root="$1" script="$2" folder target
     shift 2

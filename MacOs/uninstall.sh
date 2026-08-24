@@ -36,11 +36,20 @@ BOLD=$(tput bold 2>/dev/null || true); RESET=$(tput sgr0 2>/dev/null || true)
 GREEN=$(tput setaf 2 2>/dev/null || true); YELLOW=$(tput setaf 3 2>/dev/null || true)
 RED=$(tput setaf 1 2>/dev/null || true); BLUE=$(tput setaf 4 2>/dev/null || true)
 
+# Print a progress heading ("==> ...") for the layer being removed.
 info()  { echo "${BLUE}==>${RESET} $*"; }
+# Print a success line — also used for "nothing to remove", so a clean
+# machine reads the same as one just cleaned.
 ok()    { echo "${GREEN} ✓ ${RESET} $*"; }
+# Print a caution line: kept-by-choice, or a destructive step about to be
+# offered. Not a failure.
 warn()  { echo "${YELLOW} ! ${RESET} $*"; }
+# Print an error line — a removal that was attempted and did not work.
 fail()  { echo "${RED} ✗ ${RESET} $*"; }
 
+# Ask a yes/no question, looping until the answer is unambiguous.
+# Reads /dev/tty so the prompt survives piped output; aborts if there is no
+# terminal at all. Returns 0 for yes, 1 for no, with no Enter-default.
 ask() {
     local answer
     while true; do
@@ -54,7 +63,9 @@ ask() {
     done
 }
 
-# Enter picks the caller's default: ask_def "Q?" y|n
+# Ask a yes/no question where Enter picks a caller-supplied default.
+# Args: <question> <y|n>. The hint shown ([Y/n] or [y/N]) reflects that default.
+# Destructive steps pass "n" so a stray Enter can never delete anything.
 ask_def() {
     local answer hint
     [ "$2" = "y" ] && hint="[Y/n]" || hint="[y/N]"
@@ -70,15 +81,28 @@ ask_def() {
     done
 }
 
+# Free space on the data volume in whole GB.
+# Sampled before and after each removal so the script can report what was
+# actually freed rather than what 'du' predicted.
 free_gb() { df -g /System/Volumes/Data | awk 'NR==2 {print $4}'; }
+# Human-readable size of a path ('du -sh'), empty when it does not exist.
+# Shown inside prompts so a deletion is never agreed to blind.
 sizeof()  { du -sh "$1" 2>/dev/null | cut -f1; }
+# True when the Ollama API answers on localhost.
+# Model listing and removal both need the daemon, so several layers check this
+# before deciding whether to start one temporarily.
 ollama_server_up() { curl -sf http://localhost:11434/api/version >/dev/null 2>&1; }
+# How many models Ollama has installed on disk.
+# The engine layer refuses to uninstall Ollama while this is non-zero, which
+# keeps the dependency rule true even when a function is called directly.
 ollama_model_count() { ollama list 2>/dev/null | awk 'NR>1' | grep -c . ; }
 
 # ---------- layer: Ollama models — the gate ----------------------------------
-# Numbered menu mirroring install.sh's download menu: pick a model to remove,
-# menu re-renders, until none are left or the user cancels.
-# Returns 0 when NO models remain (safe to descend), 1 when any remain.
+# Layer 1 and the GATE: remove models one at a time from a numbered menu.
+# Mirrors the installer's download menu — pick a number, see the freed GB, the
+# menu re-renders — and starts the daemon temporarily if it is not running.
+# Returns 0 only when NO models remain; 1 (models left, or N) stops the wizard,
+# because nothing a model depends on may be removed while it exists.
 uninstallAiStackOllamaModels() {
     info "uninstallAiStackOllamaModels — the Ollama models (gate for every layer below)"
     if ! command -v ollama >/dev/null 2>&1; then
@@ -142,6 +166,9 @@ uninstallAiStackOllamaModels() {
 }
 
 # ---------- layer: mlx-lm (depends on uv) ------------------------------------
+# Remove the MLX-LM engine (the mlx-lm uv tool).
+# Then offers the HuggingFace model cache separately and defaults to keeping it:
+# it is pure re-downloadable cache, but often the largest item on the disk.
 uninstallAiStackMlx() {
     info "uninstallAiStackMlx — mlx-lm and its model cache"
     if ! command -v uv >/dev/null 2>&1 || ! uv tool list 2>/dev/null | grep -q '^mlx-lm'; then
@@ -174,6 +201,9 @@ uninstallAiStackMlx() {
 # The agents sit above the engines: they are what you type into. Removed before
 # any engine, so nothing is pulled out from under a working agent.
 
+# Remove the Pi coding agent (npm package, either publisher scope).
+# Defaults to No. Offers ~/.pi — config, plugins, session transcripts — as a
+# separate question, since that is your data rather than the program.
 uninstallAiStackPiCodingAgent() {
     info "uninstallAiStackPiCodingAgent — Pi coding agent"
     if ! command -v pi >/dev/null 2>&1; then
@@ -196,6 +226,9 @@ uninstallAiStackPiCodingAgent() {
     fi
 }
 
+# Remove OpenCode, using whichever channel installed it (brew, else npm).
+# Defaults to No, and offers ~/.config/opencode separately so provider settings
+# survive a reinstall unless you say otherwise.
 uninstallAiStackOpenCodeCodingAgent() {
     info "uninstallAiStackOpenCodeCodingAgent — OpenCode"
     if ! command -v opencode >/dev/null 2>&1; then
@@ -219,6 +252,9 @@ uninstallAiStackOpenCodeCodingAgent() {
 }
 
 # ---------- layer: Claude Code CLI -------------------------------------------
+# Remove the Claude Code CLI (npm package or native installer layout).
+# Defaults to No — it may be the very session you are typing in.
+# ~/.claude (sessions, settings, memory) is never touched by this script.
 uninstallAiStackClaudeCodingAgent() {
     info "uninstallAiStackClaudeCodingAgent — Claude Code CLI"
     if ! command -v claude >/dev/null 2>&1; then
@@ -252,6 +288,10 @@ uninstallAiStackClaudeCodingAgent() {
 }
 
 # ---------- layer: Ollama itself ---------------------------------------------
+# Remove the Ollama runtime itself, models excluded.
+# Refuses while any model is installed, so the rule holds even when called
+# directly. Stops every way it can run (brew service, LAN LaunchAgent, app,
+# bare serve), then removes the formula, the .app and its stray symlink.
 uninstallAiStackOllamaEngine() {
     info "uninstallAiStackOllamaEngine — the Ollama runtime"
     local present=0
@@ -306,6 +346,10 @@ uninstallAiStackOllamaEngine() {
 }
 
 # ---------- layer: Ollama data directory (destructive) -----------------------
+# Delete ~/.ollama: every model blob plus this machine's registry keypair.
+# The only unrecoverable step here, so it shows the size, asks twice, and both
+# questions default to No. Kept separate from the engine on purpose: losing the
+# program costs minutes, losing the blobs costs hours of downloading.
 uninstallAiStackOllamaData() {
     info "uninstallAiStackOllamaData — ~/.ollama (model blobs + registry keypair)"
     if [ ! -d "$HOME/.ollama" ]; then
@@ -331,6 +375,9 @@ uninstallAiStackOllamaData() {
 }
 
 # ---------- layer: uv (foundation of mlx-lm) ---------------------------------
+# Remove uv, the foundation MLX-LM was installed through.
+# Lists any other tools uv still manages first — removing it would leave them
+# unmanaged — and defaults to No for that reason.
 uninstallAiStackUv() {
     info "uninstallAiStackUv — uv"
     if ! command -v uv >/dev/null 2>&1 || ! brew list uv >/dev/null 2>&1; then
@@ -351,6 +398,9 @@ uninstallAiStackUv() {
 }
 
 # ---------- layer: Homebrew (never removed) ----------------------------------
+# Report Homebrew and deliberately leave it alone.
+# It manages software far beyond this stack, so removing it is never offered;
+# the upstream uninstall instructions are printed instead.
 uninstallAiStackHomebrew() {
     info "uninstallAiStackHomebrew — Homebrew"
     if ! command -v brew >/dev/null 2>&1; then
@@ -362,6 +412,9 @@ uninstallAiStackHomebrew() {
 }
 
 # ---------- status ------------------------------------------------------------
+# Print what is still standing: engines, agents, models, uv, brew, free disk.
+# Also printed when the model gate stops the run, so a cancelled uninstall still
+# ends with an accurate picture.
 uninstallAiStackStatus() {
     echo
     echo "${BOLD}================= What is left =================${RESET}"
@@ -381,6 +434,9 @@ uninstallAiStackStatus() {
 }
 
 # ---------- wrapper ----------------------------------------------------------
+# Wrapper: run every layer from most-dependent down to the foundations.
+# Models first (the gate), then coding agents, then engines and their data.
+# Stops after the gate when models remain, keeping everything they need.
 uninstallAiStack() {
     echo "${BOLD}=============================================================${RESET}"
     echo "${BOLD} Local AI coding stack — uninstaller${RESET}"

@@ -26,11 +26,25 @@ BOLD=$(tput bold 2>/dev/null || true); RESET=$(tput sgr0 2>/dev/null || true)
 GREEN=$(tput setaf 2 2>/dev/null || true); YELLOW=$(tput setaf 3 2>/dev/null || true)
 RED=$(tput setaf 1 2>/dev/null || true); BLUE=$(tput setaf 4 2>/dev/null || true)
 
+# Print a progress heading ("==> ...").
+# All narration goes through these four helpers so colour handling and
+# stream choice stay in one place.
 info()  { echo "${BLUE}==>${RESET} $*"; }
+# Print a success line (green check).
+# Used for both "did it" and "already true", since a re-run should read the
+# same whether the work happened now or earlier.
 ok()    { echo "${GREEN} ✓ ${RESET} $*"; }
+# Print a caution line (yellow !) — something worth reading, not a failure.
+# Also used for "skipped by your choice", so the transcript records decisions.
 warn()  { echo "${YELLOW} ! ${RESET} $*"; }
+# Print an error line (red x).
+# Only for things that did not work; a declined question is a warn, not a fail.
 fail()  { echo "${RED} ✗ ${RESET} $*"; }
 
+# Ask a yes/no question on the terminal and loop until the answer is clear.
+# Reads from /dev/tty, so it still works when stdout is piped to a file.
+# Returns 0 for yes, 1 for no. There is no default: every removal in this
+# script is deliberate, so Enter alone is not accepted as consent.
 ask() {
     local answer
     while true; do
@@ -44,14 +58,25 @@ ask() {
     done
 }
 
+# Human-readable size of a file or directory ('du -sh'), e.g. "33G".
+# Args: <path>. Prints an empty string when the path does not exist, so it is
+# safe to interpolate straight into a prompt.
 sizeof() { du -sh "$1" 2>/dev/null | cut -f1; }
 
 # ---------- disk-gain reporting ----------------------------------------------
+# Free space on the data volume in KB, as an integer.
+# Used as the before/after probe for gain(): 'df' is the only source that
+# reflects what macOS actually released, unlike a 'du' estimate.
 free_kb() { df -k /System/Volumes/Data | awk 'NR==2 {print $4}'; }
+# Free space on the data volume, human-readable (e.g. "114Gi").
+# Display only — free_kb() is what the arithmetic uses.
 free_h()  { df -h /System/Volumes/Data | awk 'NR==2 {print $4}'; }
 START_KB=$(free_kb)
 
-# gain <before_kb> — report space gained by the step just performed
+# Report how much disk a step actually freed.
+# Args: <free_kb before the step>. Compares against free space now and prints
+# GB, MB, or "negligible", plus the current free total.
+# Measured from df on purpose: du estimates lie when files are still open.
 gain() {
     local d=$(( $(free_kb) - $1 ))
     [ "$d" -lt 0 ] && d=0

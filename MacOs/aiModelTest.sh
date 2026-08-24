@@ -41,6 +41,9 @@ R_server=SKIP; R_generate=SKIP; R_anthropic=SKIP; R_toolcall=SKIP; R_context=SKI
 G_TOKENS=0; G_TIME=0; G_TPS=0
 TEST_ENDPOINT=""; TEST_SERVER_PID=""
 
+# Clear all per-model state before testing another model.
+# Resets the five R_* verdicts and the G_* generation metrics, so a sweep never
+# reports one model's numbers against another's name.
 aiModelTestReset() {
     R_server=SKIP; R_generate=SKIP; R_anthropic=SKIP; R_toolcall=SKIP; R_context=SKIP
     G_TOKENS=0; G_TIME=0; G_TPS=0
@@ -49,6 +52,9 @@ aiModelTestReset() {
 # enginesWithModels() comes from launchInference.sh (shared filter)
 
 # ---------- engine selector ---------------------------------------------------
+# Choose which engine to test; prints it on stdout.
+# Offers only engines that have downloaded models — there is nothing to measure
+# otherwise — and asks nothing when exactly one qualifies.
 aiModelTestEngineSelector() {
     local engines=() e
     while IFS= read -r e; do [ -n "$e" ] && engines+=("$e"); done < <(enginesWithModels)
@@ -79,8 +85,9 @@ aiModelTestEngineSelector() {
 }
 
 # ---------- prompt selector ---------------------------------------------------
-# Asked only when PROMPT was not already supplied (env var, or a wrapper such
-# as testAllAiModels.sh which asks once for the whole sweep).
+# Decide what to send the model, storing it in PROMPT.
+# Asked only when PROMPT is not already set, so a wrapper such as
+# testAllAiModels.sh can ask once for a whole sweep and not be asked again.
 aiModelTestPromptSelector() {
     if [ -n "$PROMPT" ]; then
         ok "Prompt: \"${PROMPT}\""
@@ -92,9 +99,15 @@ aiModelTestPromptSelector() {
 }
 
 # ---------- model selector (shared with the launcher) ------------------------
+# Choose which of the engine's models to test; prints the tag on stdout.
+# Args: <engine>. Shares launchInference.sh's selector so both tools show the
+# same menu rather than drifting apart.
 aiModelTestModelSelector() { launchInferenceModelSelector "$1"; }
 
 # ---------- make the engine serve this model ---------------------------------
+# Make the engine serve the chosen model, starting or re-pointing it as needed.
+# Args: <engine> <model>. Ollama loads on demand; llama.cpp and MLX bind one
+# model at server start, so a server on a different model is restarted.
 # Sets TEST_ENDPOINT, and TEST_SERVER_PID when this script started the server.
 aiModelTestEnsureServing() {
     local engine="${1:?}" model="${2:?}" host="127.0.0.1" port t=0
@@ -159,13 +172,18 @@ aiModelTestEnsureServing() {
     esac
 }
 
+# Stop the server only if this script was the one that started it.
+# Leaves a server you were already running alone — the test should not tear
+# down a session it did not create.
 aiModelTestStopServer() {   # only stops what this script started
     [ -n "${TEST_SERVER_PID:-}" ] || return 0
     kill "$TEST_SERVER_PID" 2>/dev/null
     TEST_SERVER_PID=""
 }
 
-# the id the endpoint advertises (llama-server names models its own way)
+# Ask the endpoint which model id it advertises.
+# Accepts both the OpenAI shape ({data:[{id}]}) and llama.cpp's ({models:
+# [{name}]}), because requests must name the model the server expects.
 aiModelTestServedId() {
     curl -sf --max-time 8 "${TEST_ENDPOINT}/v1/models" 2>/dev/null | python3 -c '
 import json,sys
@@ -177,6 +195,9 @@ except Exception: print("")' 2>/dev/null
 }
 
 # ---------- 1. server reachable ----------------------------------------------
+# Test 1: is the engine reachable and ready?
+# Args: <engine>. Sets R_server. A failure here stops the suite, since every
+# later test would just repeat the same connection error.
 aiModelTestServer() {
     local engine="${1:?}"
     info "Test 1 — ${engine} reachable at ${TEST_ENDPOINT}"
@@ -191,8 +212,10 @@ aiModelTestServer() {
 }
 
 # ---------- 2. generation: tokens, time, tok/s -------------------------------
-# Same OpenAI endpoint on every engine, with a warmup first so model-load time
-# is not counted as generation time.
+# Test 2: generate text and measure it. Sets R_generate and G_TOKENS/TIME/TPS.
+# Args: <engine> <model>. Uses the OpenAI endpoint on every engine, with a
+# warmup request first so model-load time is not counted as generation time —
+# that is what makes numbers from different engines comparable.
 aiModelTestGenerate() {
     local engine="${1:?}" model="${2:?}" served payload resp t0 t1
     served=$(aiModelTestServedId); [ -z "$served" ] && served="$model"
@@ -249,6 +272,10 @@ PYEOF
 }
 
 # ---------- 3. Anthropic endpoint (Ollama only) ------------------------------
+# Test 3: does /v1/messages work (the API Claude Code needs)? Sets R_anthropic.
+# Args: <engine> <model>. SKIP rather than FAIL on llama.cpp and MLX-LM: they
+# serve OpenAI-compatible APIs by design, so this is a capability note, not a
+# defect. Uses a generous token budget — thinking models reason before replying.
 aiModelTestAnthropic() {
     local engine="${1:?}" model="${2:?}" resp
     if [ "$engine" != "Ollama" ]; then
@@ -289,6 +316,10 @@ PYEOF
 }
 
 # ---------- 4. tool calling (OpenAI format — every engine) -------------------
+# Test 4: can the model emit a well-formed tool call? Sets R_toolcall.
+# Args: <engine> <model>. The agentic make-or-break, so it is tried twice:
+# PASS first time, FLAKY only on the retry, FAIL after two misses. Uses a fixed
+# weather prompt so an unrelated PROMPT cannot make a correct answer look wrong.
 aiModelTestToolCall() {
     local engine="${1:?}" model="${2:?}" served payload resp attempt
     served=$(aiModelTestServedId); [ -z "$served" ] && served="$model"
@@ -324,6 +355,9 @@ PYEOF
     esac
 }
 
+# Parse one chat-completions response and judge the tool call.
+# Args: <response json>. Returns 0 for a get_weather call carrying the required
+# argument, 1 when the model answered in prose instead (and prints what it said).
 aiModelTestToolCallParse() {
     python3 - "$1" <<'PYEOF'
 import json, sys
@@ -350,6 +384,10 @@ PYEOF
 }
 
 # ---------- 5. served context window -----------------------------------------
+# Test 5: is the served context big enough for agentic work? Sets R_context.
+# Args: <engine> <model>. Ollama reports it via /api/ps, llama.cpp via /props;
+# MLX-LM cannot report it at all, so that is WARN rather than a verdict.
+# Under 32k an agent's system prompt alone overflows — the classic silent fault.
 aiModelTestContext() {
     local engine="${1:?}" model="${2:?}" ctx=0 host
     host=$(echo "$TEST_ENDPOINT" | sed 's|http://||; s|:.*||')
@@ -392,6 +430,9 @@ except Exception: print(0)' 2>/dev/null)
 }
 
 # ---------- suite -------------------------------------------------------------
+# Run tests 2-5 against one engine and model.
+# Args: <engine> <model>. Split out from the wrapper so a sweep can reuse the
+# suite without re-asking any of the selection questions.
 aiModelTestRun() {
     local engine="${1:?}" model="${2:?}"
     aiModelTestGenerate  "$engine" "$model"
@@ -401,6 +442,10 @@ aiModelTestRun() {
 }
 
 # ---------- wrapper -----------------------------------------------------------
+# Wrapper: select engine, model and prompt, serve the model, run the suite.
+# Args: [engine] [model] — either may be given to skip its menu.
+# Ends with a verdict table and a plain reading of it: fix FAIL lines before
+# judging the model, because most of them are configuration, not capability.
 aiModelTest() {
     command -v python3 >/dev/null 2>&1 || { fail "python3 is required."; return 1; }
     local engine="${1:-}" model="${2:-}" T0 T1

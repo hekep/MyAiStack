@@ -33,21 +33,35 @@ BOLD=$(tput bold 2>/dev/null || true); RESET=$(tput sgr0 2>/dev/null || true)
 GREEN=$(tput setaf 2 2>/dev/null || true); YELLOW=$(tput setaf 3 2>/dev/null || true)
 RED=$(tput setaf 1 2>/dev/null || true); BLUE=$(tput setaf 4 2>/dev/null || true)
 
+# Print a progress heading. Narration goes to stderr on purpose: several
+# functions return their result on stdout, which must stay clean.
 info()  { echo "${BLUE}==>${RESET} $*" >&2; }
+# Print a success line to stderr — including "this was already true".
 ok()    { echo "${GREEN} ✓ ${RESET} $*" >&2; }
+# Print a caution line to stderr: a caveat, or a choice left unmade.
 warn()  { echo "${YELLOW} ! ${RESET} $*" >&2; }
+# Print an error line to stderr for something that did not work.
 fail()  { echo "${RED} ✗ ${RESET} $*" >&2; }
 
+# Yes/no question where Enter means YES.
+# For the expected path of an action you already opted into (restart the server
+# you asked to launch). Returns 0 for yes, 1 for no.
 ask_yn() {   # Enter = yes
     local a; printf "%s%s%s [Y/n] " "${BOLD}" "$1" "${RESET}" >&2
     read -r a </dev/tty || return 1
     case "$a" in ""|[Yy]|[Yy]es) return 0 ;; *) return 1 ;; esac
 }
+# Yes/no question where Enter means NO.
+# For anything that could lose work — closing an app, stopping someone else's
+# engine — so holding Enter never destroys anything. Returns 0 for yes.
 ask_ny() {   # Enter = no
     local a; printf "%s%s%s [y/N] " "${BOLD}" "$1" "${RESET}" >&2
     read -r a </dev/tty || return 1
     case "$a" in [Yy]|[Yy]es) return 0 ;; *) return 1 ;; esac
 }
+# Free-form question with a default; echoes the answer on stdout.
+# Args: <question> <default>. Enter (or no terminal) yields the default, which
+# is how every selector here becomes a single keystroke on a re-run.
 ask_val() {  # free-form with default; echoes the answer
     local a; printf "%s%s%s [%s]: " "${BOLD}" "$1" "${RESET}" "$2" >&2
     read -r a </dev/tty || { echo "$2"; return; }
@@ -56,7 +70,13 @@ ask_val() {  # free-form with default; echoes the answer
 
 # ---------- persisted choices (previous answer = next default) ---------------
 SETTINGS_FILE="$HOME/.launchInference.conf"
+# Read one persisted setting from ~/.launchInference.conf.
+# Args: <key>. Prints the value, or nothing when unset.
+# This is what makes the previous run's choice the next run's default.
 tune_get() { [ -f "$SETTINGS_FILE" ] && sed -n "s/^$1=//p" "$SETTINGS_FILE" | tail -1; }
+# Persist one setting to ~/.launchInference.conf, replacing any earlier value.
+# Args: <key> <value>. Rewrites the file rather than appending, so the file
+# does not grow one line per launch.
 tune_set() {
     local tmp; tmp=$(grep -v "^$1=" "$SETTINGS_FILE" 2>/dev/null)
     { [ -n "$tmp" ] && printf '%s\n' "$tmp"; printf '%s=%s\n' "$1" "$2"; } > "$SETTINGS_FILE"
@@ -67,25 +87,38 @@ LLAMACPP_MODEL_DIR="${LLAMACPP_MODEL_DIR:-$HOME/Models/llama.cpp}"
 MLX_HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}/hub"
 OLLAMA_PORT=11434; LLAMACPP_PORT=8080; MLX_PORT=8081
 
+# True when llama.cpp is available (llama-server or llama-cli on PATH).
+# Engine presence, not model presence — enginesWithModels() checks the latter.
 llamacpp_installed() { command -v llama-server >/dev/null 2>&1 || command -v llama-cli >/dev/null 2>&1; }
 
-# Ollama runs its OWN llama-server (random high port). Identify ours by the
-# port we serve on — never by the bare process name.
+# PIDs of the llama-server WE run, identified by the port we serve on.
+# Ollama spawns its own subprocess also called llama-server, so matching the
+# bare name would kill Ollama's runner and break it. Never match by name.
 llamacppOurPids()  { pgrep -f "llama-server .*--port ${LLAMACPP_PORT}" 2>/dev/null; }
+# Stop only our llama-server, using the same port-scoped match.
+# Safe to call when none is running; Ollama's internal runner is never touched.
 llamacppKillOurs() { pkill  -f "llama-server .*--port ${LLAMACPP_PORT}" 2>/dev/null; }
+# True when MLX-LM is installed as a uv tool.
 mlxml_installed()    { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^mlx-lm'; }
+# True when the ollama binary is on PATH.
 ollama_installed()   { command -v ollama >/dev/null 2>&1; }
 
+# This Mac's LAN address on en0, falling back to en1 (Wi-Fi vs Ethernet).
+# Empty when offline, which the network selector treats as localhost-only.
 lan_ip() { ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null; }
 
 # ---------- coding agents + engine compatibility -----------------------------
-# Pi and OpenCode drive any OpenAI-compatible endpoint, so they work with all
-# three engines. Claude Code speaks the Anthropic Messages API, which only
-# Ollama serves — offering it for llama.cpp or MLX would just fail.
+# True when the Pi coding agent is on PATH.
 pi_installed()       { command -v pi >/dev/null 2>&1; }
+# True when OpenCode is on PATH.
 opencode_installed() { command -v opencode >/dev/null 2>&1; }
+# True when the Claude Code CLI is on PATH.
 claude_installed()   { command -v claude >/dev/null 2>&1; }
 
+# Can this coding agent actually drive this engine?
+# Args: <agent> <engine>. Pi and OpenCode speak the OpenAI-compatible API every
+# engine here serves; Claude Code needs the Anthropic Messages API, which only
+# Ollama provides. This is the single rule that filters the agent menu.
 agent_supports_engine() {   # $1 agent, $2 engine
     case "$1" in
         Pi|OpenCode) return 0 ;;
@@ -93,6 +126,9 @@ agent_supports_engine() {   # $1 agent, $2 engine
         *)           return 1 ;;
     esac
 }
+# Explain, in one clause, why an agent cannot be used with an engine.
+# Args: <agent>. Shown next to an installed-but-unusable agent so it is clear
+# the option was withheld deliberately rather than forgotten.
 agent_reason() {            # why an agent cannot be used with an engine
     case "$1" in
         Claude) echo "needs the Anthropic API — only Ollama serves it" ;;
@@ -100,6 +136,8 @@ agent_reason() {            # why an agent cannot be used with an engine
     esac
 }
 
+# The port an engine serves on: Ollama 11434, llama.cpp 8080, MLX-LM 8081.
+# Args: <engine>. Fixed per engine so several scripts agree without config.
 engine_port() {
     case "$1" in
         Llama.cpp) echo "$LLAMACPP_PORT" ;;
@@ -107,6 +145,10 @@ engine_port() {
         Ollama)    echo "$OLLAMA_PORT" ;;
     esac
 }
+# Is this engine serving AND ready to infer?
+# Args: <engine> <host>. llama.cpp is probed on /health because it answers 503
+# on both /health and /v1/models while a model is still loading — treating
+# "port open" as "ready" makes the first request fail.
 engine_up() {   # $1 engine, $2 host — is it up AND ready to infer?
     local p; p=$(engine_port "$1")
     case "$1" in
@@ -116,8 +158,10 @@ engine_up() {   # $1 engine, $2 host — is it up AND ready to infer?
     esac
 }
 
-# engines actually HOLDING a model in memory (an idle Ollama daemon is not one:
-# it costs nothing and gets reused). Used by things that care about free memory.
+# List what is actually HOLDING a model, as "engine|what|memory" rows.
+# Ollama-resident models, our llama-server, mlx_lm.server. An idle Ollama daemon
+# is deliberately excluded: it holds nothing, costs nothing and gets reused, so
+# flagging it would be a false alarm.
 busyEngines() {
     local pid rss m sz
     for m in $(ollama ps 2>/dev/null | awk 'NR>1 {print $1}'); do
@@ -134,7 +178,9 @@ busyEngines() {
     done
 }
 
-# what is currently serving, with its memory footprint (daemon included)
+# List what is serving, daemon included, as "engine|what|memory" rows.
+# Broader than busyEngines(): used where stopping the daemon itself is on the
+# table, not only where memory pressure matters.
 runningEngines() {
     local pid rss
     if curl -sf --max-time 2 "http://127.0.0.1:${OLLAMA_PORT}/api/version" >/dev/null 2>&1; then
@@ -151,7 +197,9 @@ runningEngines() {
     done
 }
 
-# models installed per engine, one tag per line
+# List the GGUF models on disk as engine tags, one per line.
+# Reverses the on-disk encoding (org__repo@QUANT.gguf) back into org/repo:QUANT,
+# so what is listed here can be fed straight back to the launcher.
 llamacppListInstalled() {
     [ -d "$LLAMACPP_MODEL_DIR" ] || return 0
     local f b
@@ -161,6 +209,8 @@ llamacppListInstalled() {
         printf '%s\n' "$(printf '%s' "$b" | sed 's|@|:|; s|__|/|g')"
     done
 }
+# List MLX models in the HuggingFace cache as repo ids, one per line.
+# Reverses the cache layout (models--org--repo) into org/repo.
 mlxmlListInstalled() {
     [ -d "$MLX_HF_CACHE" ] || return 0
     local d b
@@ -170,10 +220,29 @@ mlxmlListInstalled() {
         printf '%s\n' "$(printf '%s' "${b#models--}" | sed 's|--|/|')"
     done
 }
-ollamaListInstalled() { ollama list 2>/dev/null | awk 'NR>1 {print $1}'; }
+# List Ollama model tags, one per line.
+# Falls back to reading ~/.ollama manifests when the daemon is down: the models
+# are on disk either way, and without this a stopped daemon makes Ollama look
+# like it has none — hiding it from menus it belongs in.
+ollamaListInstalled() {
+    if ollama list >/dev/null 2>&1; then
+        ollama list 2>/dev/null | awk 'NR>1 {print $1}'
+        return 0
+    fi
+    local base="$HOME/.ollama/models/manifests" f rel ns name tag
+    [ -d "$base" ] || return 0
+    find "$base" -type f 2>/dev/null | while read -r f; do
+        rel=${f#"$base"/}                 # <registry>/<namespace>/<name>/<tag>
+        rel=${rel#*/}                     # drop the registry host
+        ns=${rel%%/*}; rel=${rel#*/}
+        name=${rel%%/*}; tag=${rel#*/}
+        [ "$ns" = "library" ] && echo "${name}:${tag}" || echo "${ns}/${name}:${tag}"
+    done | sort
+}
 
-# engines worth offering: installed AND holding at least one model. An engine
-# with nothing downloaded cannot be launched, so it is never shown.
+# List engines that are installed AND have at least one model, one per line.
+# The shared filter behind every engine menu: an engine with nothing downloaded
+# cannot be launched, so it is never offered as a choice.
 enginesWithModels() {
     local e
     for e in Llama.cpp MLX-LM Ollama; do
@@ -186,6 +255,8 @@ enginesWithModels() {
     done
 }
 
+# List the models installed for one engine, one tag per line.
+# Args: <engine>. Dispatches to the per-engine lister so callers stay generic.
 engineListInstalled() {
     case "$1" in
         Llama.cpp) llamacppListInstalled ;;
@@ -194,7 +265,9 @@ engineListInstalled() {
     esac
 }
 
-# on-disk size in GB of one model (used for the memory maths)
+# On-disk size of one model in whole GB.
+# Args: <engine> <model>. Reads the .gguf file, the HF cache directory, or
+# 'ollama list' as appropriate. Feeds the context and fit calculations.
 engineModelSizeGb() {
     local engine="$1" tag="$2" f d
     case "$engine" in
@@ -211,7 +284,9 @@ engineModelSizeGb() {
 }
 
 # ---------- 1. engine selector -----------------------------------------------
-# Prints the chosen engine on stdout. Asked only when more than one is present.
+# Choose which engine to launch; prints it on stdout.
+# Offers only engines that have models, naming any installed-but-empty ones once.
+# Asks nothing when exactly one qualifies. Previous choice is the default.
 launchInferenceEngineSelector() {
     local engines=() e empty=""
     while IFS= read -r e; do [ -n "$e" ] && engines+=("$e"); done < <(enginesWithModels)
@@ -264,7 +339,9 @@ launchInferenceEngineSelector() {
 }
 
 # ---------- 2. model selector -------------------------------------------------
-# $1 = engine. Prints the chosen model tag on stdout.
+# Choose which of that engine's models to run; prints the tag on stdout.
+# Args: <engine>. Lists sizes alongside names. When the engine has exactly one
+# model it is announced and used — a question with one answer is not a choice.
 launchInferenceModelSelector() {
     local engine="${1:?engine required}" models=() m
     while IFS= read -r m; do [ -n "$m" ] && models+=("$m"); done < <(engineListInstalled "$engine")
@@ -300,9 +377,10 @@ launchInferenceModelSelector() {
 }
 
 # ---------- 3. context selector ----------------------------------------------
-# $1 engine, $2 model. Prints the chosen context length in tokens.
-# Offers 32K / 64K / 128K (default) and larger sizes only when the weights plus
-# the estimated KV cache still fit the GPU budget.
+# Choose the context window; prints it in tokens on stdout.
+# Args: <engine> <model>. Offers 32K/64K/128K (default) and larger, but only
+# sizes whose weights + estimated KV cache + runtime fit the GPU budget; for
+# Ollama it also hides anything above the model's own ceiling from /api/show.
 launchInferenceContextSelector() {
     local engine="${1:?}" model="${2:?}" size_gb gpu_gb total_gb limit_mb
     size_gb=$(engineModelSizeGb "$engine" "$model"); [ "${size_gb:-0}" -lt 1 ] && size_gb=1
@@ -372,7 +450,10 @@ except Exception: print(0)' 2>/dev/null)
 }
 
 # ---------- 4. network selector (every engine, not just Ollama) --------------
-# $1 = engine. Prints the bind address on stdout.
+# Choose the bind address; prints it on stdout.
+# Args: <engine>. Asked for every engine, not just Ollama, because all three
+# serve over a socket and none of them authenticate. Refuses to bind a
+# non-private address, and warns that LAN mode is open to the whole network.
 launchInferenceNetworkSelector() {
     local engine="${1:?}" ip def sel
     ip=$(lan_ip)
@@ -403,10 +484,10 @@ launchInferenceNetworkSelector() {
 }
 
 # ---------- 4b. coding agent selector ----------------------------------------
-# $1 = engine. Prints the chosen agent, or "none".
-# Only agents that are BOTH installed and compatible with this engine are
-# offered. Zero options -> says so; exactly one -> announces it and asks
-# nothing; several -> numeric menu.
+# Choose the coding agent; prints its name, or "none", on stdout.
+# Args: <engine>. Offers only agents that are installed AND compatible with this
+# engine, naming incompatible ones with the reason. One valid option answers
+# itself; none leaves the server running and says what would have worked.
 launchInferenceAgentSelector() {
     local engine="${1:?}" all=() usable=() blocked=() a
     pi_installed       && all+=("Pi")
@@ -454,10 +535,10 @@ launchInferenceAgentSelector() {
 }
 
 # ---------- 4c. free the hardware from previous runs --------------------------
-# A previously launched engine keeps its whole model resident. Before starting
-# a new one, offer to stop what is already serving so the new model gets the
-# machine to itself.
-# $1 = the engine about to be launched (its own server is restarted anyway).
+# Offer to stop whatever is already serving, so the new model gets the machine.
+# Args: <engine about to launch>. Lists what is running with its memory first.
+# Unloads Ollama models but keeps the cheap daemon; can stop the daemon too when
+# switching engines. Declining is fine — the new model just gets less memory.
 launchInferenceKillPrevious() {
     local target="${1:-}" rows line eng what mem killed=0
     rows=$(runningEngines)
@@ -508,8 +589,10 @@ launchInferenceKillPrevious() {
 }
 
 # ---------- 5. free resources -------------------------------------------------
-# Every open desktop app, biggest memory user first, "Close? [y/N]" each.
-# Never touches the app hosting this session, Finder, or the engines.
+# Walk every open desktop app, biggest memory first, offering to close each.
+# Enumerated live, so nothing is hardcoded. Enter means NO, and the app hosting
+# this session is skipped by walking the parent-process chain — otherwise the
+# script could close the terminal it is running in. Finder and engines skipped.
 launchInferenceFreeResources() {
     info "Scanning open desktop applications..."
     local ancestors="" anc=$$
@@ -570,7 +653,10 @@ launchInferenceFreeResources() {
 }
 
 # ---------- 6. prerequisites --------------------------------------------------
-# $1 engine, $2 model, $3 context. Fails when it cannot fit.
+# Hard gate: will this model at this context actually fit?
+# Args: <engine> <model> <context>. Compares weights + KV estimate + runtime
+# against the GPU budget and fails with the exact sysctl to raise the limit.
+# Runs before anything is loaded, because discovering it afterwards means swap.
 launchInferencePrerequisites() {
     local engine="${1:?}" model="${2:?}" ctx="${3:?}" size_gb kv need gpu_gb total_gb limit_mb avail
     size_gb=$(engineModelSizeGb "$engine" "$model"); [ "${size_gb:-0}" -lt 1 ] && size_gb=1
@@ -595,7 +681,10 @@ launchInferencePrerequisites() {
 }
 
 # ---------- 7. start the engine ----------------------------------------------
-# $1 engine, $2 model, $3 context, $4 bind address.
+# Start the engine on the chosen model, context and address.
+# Args: <engine> <model> <context> <bind>. Offers to restart a server already
+# running, waits for real readiness, then reports endpoint, memory and CPU.
+# Sets LAUNCH_ENDPOINT, which the agent step consumes.
 launchInferenceStart() {
     local engine="${1:?}" model="${2:?}" ctx="${3:?}" bind="${4:?}" port
     port=$(engine_port "$engine")
@@ -673,8 +762,9 @@ launchInferenceStart() {
 # ---------- 8. start the coding agent ----------------------------------------
 # $1 agent, $2 engine, $3 model. Uses LAUNCH_ENDPOINT set by the start step.
 
-# the id the OpenAI-compatible endpoint actually advertises (llama-server and
-# mlx_lm.server name models their own way, so ask rather than assume)
+# Ask the running endpoint what model id it advertises.
+# Needed because llama-server and mlx_lm.server name models their own way, and
+# an agent config must use the id the server will actually accept.
 endpointModelId() {
     curl -sf --max-time 8 "${LAUNCH_ENDPOINT}/v1/models" 2>/dev/null | python3 -c '
 import json,sys
@@ -685,6 +775,9 @@ try:
 except Exception: print("")' 2>/dev/null
 }
 
+# Hand the running endpoint to the chosen coding agent.
+# Args: <agent> <engine> <model>. Dispatches to the per-agent launcher, or
+# prints the endpoint and stops when the agent is "none".
 launchInferenceStartAgent() {
     local agent="${1:?}" engine="${2:?}" model="${3:?}" endpoint="${LAUNCH_ENDPOINT:-}"
     [ "$agent" = "none" ] && {
@@ -700,6 +793,10 @@ launchInferenceStartAgent() {
 }
 
 # --- Claude Code: Anthropic API, Ollama only ---------------------------------
+# Launch Claude Code against a local Ollama endpoint.
+# Ollama only: Claude Code speaks the Anthropic Messages API. Maps all three
+# model tiers to the local model, puts a small model on the background tier when
+# one exists, and offers continue/resume when this directory has sessions.
 launchInferenceAgentClaude() {
     local engine="$1" model="$2" endpoint="${LAUNCH_ENDPOINT:-}"
     if [ "$engine" != "Ollama" ]; then
@@ -735,8 +832,10 @@ launchInferenceAgentClaude() {
 }
 
 # --- Pi: OpenAI-compatible, any engine ---------------------------------------
-# Config lives at ~/.pi/agent/local-models.json ({"url":..., "apiKey":...});
-# models are then picked inside Pi with /models.
+# Launch Pi against the running endpoint.
+# Writes ~/.pi/agent/local-models.json ({url, apiKey}) — backing up any existing
+# one — and makes sure the local-models plugin is present. Pi discovers models
+# itself, so the model is picked inside Pi with /models.
 launchInferenceAgentPi() {
     local engine="$1" model="$2" endpoint="${LAUNCH_ENDPOINT:-}" cfg="$HOME/.pi/agent/local-models.json"
     mkdir -p "$(dirname "$cfg")"
@@ -755,8 +854,10 @@ launchInferenceAgentPi() {
 }
 
 # --- OpenCode: OpenAI-compatible, any engine ---------------------------------
-# Config at ~/.config/opencode/opencode.json — baseURL must sit inside
-# "options", and each model is keyed by the id the endpoint advertises.
+# Launch OpenCode against the running endpoint.
+# Merges a "local" provider into ~/.config/opencode/opencode.json (backing up
+# the old file) with baseURL inside "options" — OpenCode ignores it anywhere
+# else — keyed by the id the endpoint really advertises.
 launchInferenceAgentOpenCode() {
     local engine="$1" model="$2" endpoint="${LAUNCH_ENDPOINT:-}" cfg="$HOME/.config/opencode/opencode.json" mid
     mid=$(endpointModelId); [ -z "$mid" ] && mid="$model"
@@ -788,6 +889,10 @@ PYEOF
 }
 
 # ---------- wrapper -----------------------------------------------------------
+# Wrapper: engine, model, context, network, free memory, fit check, start, agent.
+# Every selector answers itself when only one option is valid, so a repeat launch
+# of the same setup is mostly Enter. Any step returning non-zero stops the run
+# before anything is loaded.
 launchInference() {
     echo "${BOLD}=============================================================${RESET}" >&2
     echo "${BOLD} Local inference — engine, model, context, network${RESET}" >&2

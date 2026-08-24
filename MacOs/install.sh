@@ -44,11 +44,19 @@ BOLD=$(tput bold 2>/dev/null || true); RESET=$(tput sgr0 2>/dev/null || true)
 GREEN=$(tput setaf 2 2>/dev/null || true); YELLOW=$(tput setaf 3 2>/dev/null || true)
 RED=$(tput setaf 1 2>/dev/null || true); BLUE=$(tput setaf 4 2>/dev/null || true)
 
+# Print a progress heading ("==> ...") naming the step about to run.
 info()  { echo "${BLUE}==>${RESET} $*"; }
+# Print a success line — also used for "already installed and current",
+# so a re-run reads the same whether work happened or not.
 ok()    { echo "${GREEN} ✓ ${RESET} $*"; }
+# Print a caution line: a caveat, or something skipped by your choice.
 warn()  { echo "${YELLOW} ! ${RESET} $*"; }
+# Print an error line for something that was attempted and failed.
 fail()  { echo "${RED} ✗ ${RESET} $*"; }
 
+# Ask a yes/no question, looping until the answer is unambiguous.
+# Reads /dev/tty so the prompt survives piped output, and aborts when there is
+# no terminal. Returns 0 for yes, 1 for no; no Enter-default.
 ask() {
     local answer
     while true; do
@@ -62,7 +70,9 @@ ask() {
     done
 }
 
-# like ask(), but Enter picks a caller-supplied default: ask_def "Q?" y|n
+# Ask a yes/no question where Enter picks a caller-supplied default.
+# Args: <question> <y|n>; the [Y/n] or [y/N] hint reflects it. Optional installs
+# pass "n", expected ones pass "y", so a re-run is mostly Enter.
 ask_def() {
     local answer hint
     [ "$2" = "y" ] && hint="[Y/n]" || hint="[y/N]"
@@ -78,6 +88,9 @@ ask_def() {
     done
 }
 
+# Free space on the data volume in whole GB.
+# Every disk decision here reads this rather than trusting an earlier value:
+# a 30 GB download changes the answer mid-run.
 free_gb() { df -g /System/Volumes/Data | awk 'NR==2 {print $4}'; }
 
 # ---------- registry tag availability (cached 24 h) --------------------------
@@ -87,7 +100,13 @@ free_gb() { df -g /System/Volumes/Data | awk 'NR==2 {print $4}'; }
 # containing "/" is a HuggingFace repo (llama.cpp GGUF, MLX); otherwise it is
 # an Ollama registry tag.
 TAG_CACHE_DIR="$HOME/.cache/ollama-tag-check"
+# Path of the cache entry for one model tag's availability probe.
+# Args: <tag>. Slashes and colons become underscores so any tag is a filename.
 tag_cache_file() { echo "$TAG_CACHE_DIR/$(echo "$1" | tr ':/' '__')"; }
+# Probe whether one model tag exists upstream, caching the result for 24 h.
+# Args: <tag>. A tag containing "/" is a HuggingFace repo, otherwise an Ollama
+# registry tag. Meant to be run in parallel for a whole menu; the cache makes
+# the first render ~2 s and every later one instant.
 tag_check_prefetch() {   # probe one tag and cache the HTTP status
     local f code name="${1%%:*}" t="${1#*:}" url
     f=$(tag_cache_file "$1")
@@ -100,6 +119,9 @@ tag_check_prefetch() {   # probe one tag and cache the HTTP status
     code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$url" 2>/dev/null)
     echo "${code:-000}" > "$f"
 }
+# True when a probed tag exists (HTTP 200).
+# Args: <tag>. An unreachable network (000/empty) counts as available: better to
+# offer a model and fail at download than to hide everything while offline.
 tag_available() {        # 200 = exists; 000/empty (offline) = benefit of the doubt
     local c
     c=$(cat "$(tag_cache_file "$1")" 2>/dev/null)
@@ -107,10 +129,10 @@ tag_available() {        # 200 = exists; 000/empty (offline) = benefit of the do
 }
 
 # ---------- failed-download cleanup ------------------------------------------
-# A failed pull can leave complete-but-unreferenced blobs (tens of GB) in
-# ~/.ollama/models/blobs. This deletes every blob no manifest references.
-# Safety: skipped entirely while any 'ollama pull' is running, and files
-# currently open by a process are never touched.
+# Delete Ollama blobs that no manifest references — the debris of failed pulls.
+# Args: [ask] to confirm first, since leftovers can also resume an interrupted
+# download. Skips entirely while a pull is running and never touches a file that
+# is open, so an in-flight 30 GB download cannot be destroyed by cleanup.
 ollama_prune_orphan_blobs() {
     local blobdir="$HOME/.ollama/models/blobs" mdir="$HOME/.ollama/models/manifests"
     [ -d "$blobdir" ] || return 0
@@ -150,17 +172,25 @@ ollama_prune_orphan_blobs() {
 
 # Where to reach the Ollama API (launchInference.sh may bind it to a LAN IP).
 OLLAMA_API="${OLLAMA_API:-127.0.0.1}"
+# True when the Ollama API answers on OLLAMA_API:11434.
 ollama_server_up() { curl -sf "http://${OLLAMA_API}:11434/api/version" >/dev/null 2>&1; }
+# This Mac's LAN address on en0, falling back to en1. Empty when offline.
 lan_ip() { ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null; }
 
+# True when Ollama already has this exact tag. Args: <tag>.
 model_installed() { ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$1"; }
 
 # ---------- engine detection --------------------------------------------------
+# True when llama.cpp is installed (llama-cli or llama-server on PATH).
 llamacpp_installed() { command -v llama-cli >/dev/null 2>&1 || command -v llama-server >/dev/null 2>&1; }
+# True when MLX-LM is installed as a uv tool.
 mlxml_installed()    { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^mlx-lm'; }
+# True when the ollama binary is on PATH.
 ollama_installed()   { command -v ollama >/dev/null 2>&1; }
 
-# space-separated list of engines present, empty when none
+# Space-separated list of engines present, empty when none.
+# The wrapper uses this as a gate: with no engine, every step below it — models
+# included — would be meaningless, so the wizard stops there.
 installed_engines() {
     local e=""
     llamacpp_installed && e="${e} llama.cpp"
@@ -169,6 +199,9 @@ installed_engines() {
     echo "${e# }"
 }
 
+# Check there is room for a download, and say so either way.
+# Args: <GB needed> <what for>. Returns 1 when short, printing both numbers.
+# Called immediately before each pull, not once at the start.
 require_disk() {
     local need=$1 what=$2 have
     have=$(free_gb)
@@ -180,6 +213,9 @@ require_disk() {
 }
 
 # ---------- step: sanity — platform + host RAM (sets TOTAL_GB / GPU_GB) ------
+# Step 1: confirm the machine can run this at all, and measure it.
+# Requires Apple Silicon macOS and at least 16 GB RAM. Sets TOTAL_GB and GPU_GB
+# (~75 % of RAM, the default Metal allocation), which size every later menu.
 installAiStackSanity() {
     info "installAiStackSanity — platform and memory detection"
     if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
@@ -200,6 +236,10 @@ installAiStackSanity() {
 # ---------- step: HARD GATE — disk space -------------------------------------
 MIN_DISK_GB=25
 RECOMMENDED_DISK_GB=60
+# Step 2: HARD BLOCK until there is enough free disk. No bypass.
+# Below 25 GB it shows the shortfall and the measured disk hogs, offers to delete
+# local Time Machine snapshots (they pin freed space, making cleanup look
+# useless), and loops on Enter to re-check until the requirement is met.
 installAiStackDiskGate() {
     info "installAiStackDiskGate — disk space (need >= ${MIN_DISK_GB} GB, ${RECOMMENDED_DISK_GB}+ recommended)"
     local have
@@ -246,6 +286,9 @@ installAiStackDiskGate() {
 }
 
 # ---------- step: Homebrew ---------------------------------------------------
+# Step 3: make sure Homebrew is present, offering to install it.
+# Everything below depends on it, so declining ends the wizard rather than
+# producing a half-built stack.
 installAiStackHomebrew() {
     info "installAiStackHomebrew — package manager"
     if command -v brew >/dev/null 2>&1; then
@@ -261,6 +304,10 @@ installAiStackHomebrew() {
 }
 
 # ---------- step: Ollama engine ----------------------------------------------
+# Engine step, default no: install or migrate Ollama.
+# Its advantages are a managed daemon and the Anthropic API that Claude Code
+# needs; its quant ladder is the narrowest. A standalone Ollama.app is offered
+# the migration to the brew formula, keeping the models in ~/.ollama.
 installAiStackOllamaEngine() {
     info "installAiStackOllamaEngine — the Ollama runtime"
     command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew (run installAiStackHomebrew)."; return 1; }
@@ -310,9 +357,9 @@ installAiStackOllamaEngine() {
 }
 
 # ---------- Ollama daemon, only so that pulls work -------------------------
-# NOTE: serving is NOT an install concern. Network exposure, context size and
-# keeping a model resident all live in launchInference.sh. This helper only
-# makes sure the daemon is up long enough to download models.
+# Start the Ollama daemon if it is not already up, quietly.
+# Downloads need the daemon, but serving is launchInference.sh's job — so this
+# deliberately does not ask about context size or network exposure.
 ollama_ensure_daemon() {
     ollama_server_up && return 0
     info "Starting the Ollama daemon (needed to download models)..."
@@ -323,8 +370,9 @@ ollama_ensure_daemon() {
 }
 
 # ---------- step: uv ---------------------------------------------------------
-# installAiStackUv [required]
-# "required" installs without asking — used when another step depends on it.
+# Install uv, the Python tool manager MLX-LM is delivered through.
+# Args: [required] to install without asking, used when another step depends on
+# it — you already agreed to MLX-LM, so being asked again is noise.
 installAiStackUv() {
     info "installAiStackUv — Python tool manager (needed by MLX-LM)"
     command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew."; return 1; }
@@ -346,6 +394,10 @@ installAiStackUv() {
 
 # ---------- step: mlx-lm -----------------------------------------------------
 # ---------- engine step: llama.cpp (asked first, default YES) ----------------
+# Engine step, default YES: install llama.cpp via Homebrew.
+# Recommended first because it is the only engine here that reaches the Q5_K_M
+# and Q6_K quants — Ollama's registry carries q4_K_M and q8_0 and nothing
+# between. Already installed: offers an upgrade only when one actually exists.
 installAiStackLlamacppEngine() {
     info "installAiStackLlamacppEngine — llama.cpp (GGUF engine)"
     command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew."; return 1; }
@@ -369,6 +421,10 @@ installAiStackLlamacppEngine() {
 }
 
 # ---------- engine step: MLX-LM (optional, default NO) -----------------------
+# Engine step, default no: install MLX-LM (Apple's own framework) via uv.
+# Usually the fastest inference on this chip and it publishes 6-bit builds.
+# Pulls uv in automatically when accepted; when already installed it checks PyPI
+# and asks about an update only if there is one.
 installAiStackMlxmlEngine() {
     info "installAiStackMlxmlEngine — MLX-LM (Apple-native engine)"
     if mlxml_installed; then
@@ -403,10 +459,14 @@ installAiStackMlxmlEngine() {
 #   Pi, OpenCode  -> any OpenAI-compatible endpoint (all three engines)
 #   Claude Code   -> Anthropic Messages API only (Ollama)
 
+# True when the Pi coding agent is on PATH.
 pi_installed()       { command -v pi >/dev/null 2>&1; }
+# True when OpenCode is on PATH.
 opencode_installed() { command -v opencode >/dev/null 2>&1; }
+# True when the Claude Code CLI is on PATH.
 claude_installed()   { command -v claude >/dev/null 2>&1; }
 
+# Space-separated list of coding agents present, empty when none.
 installed_agents() {
     local a=""
     pi_installed       && a="${a} Pi"
@@ -417,6 +477,10 @@ installed_agents() {
 
 # --- Pi (default YES) ---------------------------------------------------------
 PI_NPM_PKG="@earendil-works/pi-coding-agent"
+# Coding-agent step, default YES: install Pi and its local-model plugin.
+# Recommended because it works with every engine here — it drives any
+# OpenAI-compatible endpoint. Already installed: checks npm and offers an update
+# only when a newer version exists.
 installAiStackPiCodingAgent() {
     info "installAiStackPiCodingAgent — Pi (minimal terminal coding harness)"
     if pi_installed; then
@@ -450,6 +514,9 @@ installAiStackPiCodingAgent() {
 }
 
 # --- OpenCode (default NO) ----------------------------------------------------
+# Coding-agent step, default no: install OpenCode via brew, npm as fallback.
+# Also engine-agnostic. Already installed: offers an upgrade only when brew
+# reports one.
 installAiStackOpenCodeCodingAgent() {
     info "installAiStackOpenCodeCodingAgent — OpenCode (terminal agentic coder)"
     if opencode_installed; then
@@ -476,6 +543,10 @@ installAiStackOpenCodeCodingAgent() {
 }
 
 # --- Claude Code (default NO; Ollama-only) ------------------------------------
+# Coding-agent step, default no: install the Claude Code CLI.
+# Default no because it speaks the Anthropic API, so of the engines here it works
+# with Ollama alone. Already installed: compares against the npm registry (which
+# works for the native build too) and asks only when an update exists.
 installAiStackClaudeCodingAgent() {
     info "installAiStackClaudeCodingAgent — Claude Code CLI"
     if claude_installed; then
@@ -528,9 +599,30 @@ installAiStackClaudeCodingAgent() {
 # (one tag per line) and one that downloads a tag. aiStackModelMenu does the
 # rest, identically for every engine.
 
-# --- Ollama: pulls into ~/.ollama via the daemon ------------------------------
-ollamaListInstalled() { ollama list 2>/dev/null | awk 'NR>1 {print $1}'; }
+# List Ollama model tags, one per line.
+# Falls back to reading ~/.ollama manifests when the daemon is down: the models
+# are on disk either way, and without this a stopped daemon makes Ollama look
+# like it has none — hiding it from menus it belongs in.
+ollamaListInstalled() {
+    if ollama list >/dev/null 2>&1; then
+        ollama list 2>/dev/null | awk 'NR>1 {print $1}'
+        return 0
+    fi
+    local base="$HOME/.ollama/models/manifests" f rel ns name tag
+    [ -d "$base" ] || return 0
+    find "$base" -type f 2>/dev/null | while read -r f; do
+        rel=${f#"$base"/}                 # <registry>/<namespace>/<name>/<tag>
+        rel=${rel#*/}                     # drop the registry host
+        ns=${rel%%/*}; rel=${rel#*/}
+        name=${rel%%/*}; tag=${rel#*/}
+        [ "$ns" = "library" ] && echo "${name}:${tag}" || echo "${ns}/${name}:${tag}"
+    done | sort
+}
 
+# Download one Ollama model, surviving the failures that actually happen.
+# Args: <tag>. Retries transient errors up to three times (the download resumes
+# each time), reports the real error rather than a guess, and keeps resumable
+# data while cleaning up after a permanent failure.
 ollamaPullModel() {
     local tag="$1" pull_log attempt ok_pull=0 last_err=""
     info "Pulling ${tag}..."
@@ -567,10 +659,13 @@ ollamaPullModel() {
 # --- llama.cpp: plain GGUF files, downloaded with resumable curl --------------
 LLAMACPP_MODEL_DIR="${LLAMACPP_MODEL_DIR:-$HOME/Models/llama.cpp}"
 
-# tag "org/repo:QUANT" <-> local file "org__repo@QUANT.gguf"
+# Local path for one llama.cpp tag: org__repo@QUANT.gguf under the model dir.
+# Args: <tag>. The encoding is reversible, which is how the launcher turns files
+# on disk back into tags without keeping a separate index.
 llamacppLocalFile() {
     echo "${LLAMACPP_MODEL_DIR}/$(printf '%s' "$1" | sed 's|/|__|g; s|:|@|').gguf"
 }
+# List downloaded GGUFs as tags by reversing that filename encoding.
 llamacppListInstalled() {
     [ -d "$LLAMACPP_MODEL_DIR" ] || return 0
     local f b
@@ -580,6 +675,10 @@ llamacppListInstalled() {
         printf '%s\n' "$(printf '%s' "$b" | sed 's|@|:|; s|__|/|g')"
     done
 }
+# Download one GGUF for llama.cpp.
+# Args: <tag>. Resolves the real filename from the repo tree first, because
+# uploaders name files differently, then fetches with curl -C - so an interrupted
+# download resumes instead of restarting — the thing Ollama's HF path cannot do.
 llamacppPullModel() {
     local tag="$1" repo="${tag%:*}" quant="${tag##*:}" out file url
     out=$(llamacppLocalFile "$tag")
@@ -620,6 +719,7 @@ for e in t:
 # --- MLX-LM: HuggingFace repos in the standard HF cache ----------------------
 MLX_HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}/hub"
 
+# List MLX models in the HuggingFace cache as repo ids (models--org--repo).
 mlxmlListInstalled() {
     [ -d "$MLX_HF_CACHE" ] || return 0
     local d b
@@ -629,6 +729,9 @@ mlxmlListInstalled() {
         printf '%s\n' "$(printf '%s' "${b#models--}" | sed 's|--|/|')"
     done
 }
+# Download one MLX model into the HuggingFace cache.
+# Args: <repo>. Uses huggingface_hub via 'uv run --with', so nothing extra is
+# installed permanently, and already-fetched shards resume.
 mlxmlPullModel() {
     local tag="$1"
     command -v uv >/dev/null 2>&1 || { fail "uv is required to download MLX models."; return 1; }
@@ -647,9 +750,10 @@ PYEOF
 }
 
 # ---------- generic model menu, shared by every engine -----------------------
-# aiStackModelMenu <EngineFolder> <list-installed-fn> <pull-fn>
-# Filters: fits the current GPU limit, fits free disk, not already installed,
-# tag verified to exist upstream. Biggest first, loops until "N".
+# The model menu, shared by all three engines.
+# Args: <EngineFolder> <list-installed-fn> <pull-fn>. Loads that engine's
+# catalog, hides models that do not fit the GPU limit or free disk, are already
+# installed, or do not exist upstream — then loops until you answer N.
 aiStackModelMenu() {
     local engine="$1" list_fn="$2" pull_fn="$3"
 
@@ -734,6 +838,9 @@ aiStackModelMenu() {
 }
 
 # ---------- model steps, one per engine (same order as the engine steps) ------
+# Model step for llama.cpp: GGUF files into ~/Models/llama.cpp.
+# Skipped with a notice when llama.cpp is not installed, since another engine
+# may well be the one in use.
 installAiStackLlamacppModels() {
     info "installAiStackLlamacppModels — GGUF models for llama.cpp"
     if ! llamacpp_installed; then
@@ -744,6 +851,8 @@ installAiStackLlamacppModels() {
     aiStackModelMenu "Llama.cpp" llamacppListInstalled llamacppPullModel
 }
 
+# Model step for MLX-LM: HuggingFace repos into the HF cache.
+# Skipped with a notice when MLX-LM is not installed.
 installAiStackMlxmlModels() {
     info "installAiStackMlxmlModels — MLX models for MLX-LM"
     if ! mlxml_installed; then
@@ -754,6 +863,9 @@ installAiStackMlxmlModels() {
     aiStackModelMenu "MLX-LM" mlxmlListInstalled mlxmlPullModel
 }
 
+# Model step for Ollama: registry tags into ~/.ollama.
+# Skipped when Ollama is absent. Prunes the debris of earlier failed pulls first,
+# so the free-space numbers the menu shows are honest.
 installAiStackOllamaModels() {
     info "installAiStackOllamaModels — models for Ollama"
     if ! ollama_installed; then
@@ -767,6 +879,9 @@ installAiStackOllamaModels() {
 }
 
 # ---------- step: verification -----------------------------------------------
+# Final step: report what is installed — engines, agents, tooling, models.
+# Read-only. Benchmarking lives in aiModelTest.sh, and serving in
+# launchInference.sh; installing should not start or measure anything.
 installAiStackVerification() {
     info "installAiStackVerification — status summary"
     echo
@@ -811,6 +926,9 @@ installAiStackVerification() {
 }
 
 # ---------- wrapper ----------------------------------------------------------
+# Wrapper: sanity, disk gate, Homebrew, engines, agents, models, verification.
+# Hard-fails on the foundations and stops entirely when no engine was installed.
+# Every step is independently callable, so this is only the convenient order.
 installAiStack() {
     echo "${BOLD}=============================================================${RESET}"
     echo "${BOLD} Local AI coding stack — installer (universal, re-runnable)${RESET}"

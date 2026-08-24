@@ -29,11 +29,21 @@ source "${DIR}/aiModelTest.sh"
 # is identified by the port we serve on, never by the bare name.
 SWEEP_PIDS=""
 
+# Count inference servers still alive that this sweep may have started.
+# Covers our llama-server (matched by port, never by name) and mlx_lm.server.
+# Prints a number, so callers can poll it until teardown really finished.
 engineProcsAlive() {
     { llamacppOurPids; pgrep -f "mlx_lm.server" 2>/dev/null; } | grep -c . || true
 }
+# Count models Ollama currently holds in memory ('ollama ps').
+# The daemon itself is not counted: idle, it holds nothing and costs nothing.
+# Prints a number, used as the second half of the teardown wait condition.
 ollamaResident() { ollama ps 2>/dev/null | awk 'NR>1' | grep -c . || true; }
 
+# Return the machine to an empty state before/after every model under test.
+# Unloads all Ollama models, stops our llama-server and any mlx server, then
+# WAITS (up to 40 s, escalating to SIGKILL at 20 s) until they are really gone.
+# Without the wait, a 30 GB model is still resident when the next one loads.
 freeAllEngines() {
     local m i alive resident
     # 1. unload every model Ollama is holding (daemon stays: it is cheap)
@@ -56,14 +66,18 @@ freeAllEngines() {
     ok "Hardware free — $(freeMemGb) GB memory available."
 }
 
+# Memory available right now in GB (free + inactive + speculative pages).
+# Printed after teardown so the log shows what was actually recovered.
 freeMemGb() {
     vm_stat | awk '/Pages free/{f=$3} /Pages inactive/{i=$3} /Pages speculative/{s=$3}
                    END {gsub(/\./,"",f); gsub(/\./,"",i); gsub(/\./,"",s);
                         printf "%.1f", (f+i+s)*16384/1073741824}'
 }
 
-# would this model fit the GPU budget at all? (never start one that cannot —
-# that is exactly what crashes the machine)
+# Backstop: can this single model load at all on this machine?
+# Args: <engine> <model>. True when weights + 4 GB fits the GPU budget.
+# Deliberately looser than the install-time rule: teardown guarantees only one
+# model is resident, so the generous KV allowance would cause false skips.
 modelFitsNow() {
     local engine="$1" model="$2" size need gpu limit total
     size=$(engineModelSizeGb "$engine" "$model"); [ "${size:-0}" -lt 1 ] && size=1
@@ -78,7 +92,13 @@ modelFitsNow() {
     [ "$need" -le "$gpu" ]
 }
 
+# Tear down after one model has been measured.
+# A thin alias for freeAllEngines(): teardown is identical before and after,
+# and doing it in both places is what keeps two models from ever overlapping.
 stopEngineAfterTest() { freeAllEngines; }
+# Emergency teardown for the Ctrl-C / TERM trap.
+# Same work as freeAllEngines() but silent, so an interrupted sweep still
+# leaves the machine free instead of holding tens of GB.
 cleanupAll()          { freeAllEngines >/dev/null 2>&1; }
 trap 'echo; warn "Interrupted — stopping any server this sweep started."; cleanupAll; exit 130' INT TERM
 
