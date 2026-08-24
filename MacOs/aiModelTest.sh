@@ -106,7 +106,7 @@ aiModelTestModelSelector() {
     if [ $# -lt 1 ]; then
         aiStackUsage "aiModelTestModelSelector <engine>" \
             "$(_hintEngine)" \
-            "example : aiModelTestModelSelector Ollama"
+            "$(_hintExamples aiModelTestModelSelector engine)"
         return 2
     fi
     launchInferenceModelSelector "$1"
@@ -119,7 +119,11 @@ aiModelTestModelSelector() {
 # Sets TEST_ENDPOINT, and TEST_SERVER_PID when this script started the server.
 aiModelTestEnsureServing() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "aiModelTestEnsureServing <engine> <model>" "$(_hintEngine)" "$(_hintModel)" "effect  : starts or re-points the engine; sets TEST_ENDPOINT"
+        aiStackUsage "aiModelTestEnsureServing <engine> <model>" \
+            "$(_hintEngine)" \
+            "$(_hintModel)" \
+            "effect  : starts or re-points the engine; sets TEST_ENDPOINT" \
+            "$(_hintExamples aiModelTestEnsureServing engine-model)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" host="127.0.0.1" port t=0
@@ -212,7 +216,10 @@ except Exception: print("")' 2>/dev/null
 # later test would just repeat the same connection error.
 aiModelTestServer() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "aiModelTestServer <engine>" "$(_hintEngine)" "note    : call aiModelTestEnsureServing first — it sets TEST_ENDPOINT"
+        aiStackUsage "aiModelTestServer <engine>" \
+            "$(_hintEngine)" \
+            "note    : call aiModelTestEnsureServing first — it sets TEST_ENDPOINT" \
+            "$(_hintExamples aiModelTestServer engine)"
         return 2
     fi
     local engine="${1:-}"
@@ -234,7 +241,11 @@ aiModelTestServer() {
 # that is what makes numbers from different engines comparable.
 aiModelTestGenerate() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "aiModelTestGenerate <engine> <model>" "$(_hintEngine)" "$(_hintModel)" "prompt  : override with PROMPT=... ; sets G_TOKENS/G_TIME/G_TPS"
+        aiStackUsage "aiModelTestGenerate <engine> <model>" \
+            "$(_hintEngine)" \
+            "$(_hintModel)" \
+            "prompt  : override with PROMPT=... ; sets G_TOKENS/G_TIME/G_TPS" \
+            "$(_hintExamples aiModelTestGenerate engine-model)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" served payload resp t0 t1
@@ -298,7 +309,11 @@ PYEOF
 # defect. Uses a generous token budget — thinking models reason before replying.
 aiModelTestAnthropic() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "aiModelTestAnthropic <engine> <model>" "$(_hintEngine)" "$(_hintModel)" "note    : only meaningful for Ollama; SKIPs on the others"
+        aiStackUsage "aiModelTestAnthropic <engine> <model>" \
+            "$(_hintEngine)" \
+            "$(_hintModel)" \
+            "note    : only meaningful for Ollama; SKIPs on the others" \
+            "$(_hintExamples aiModelTestAnthropic engine-model Claude)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" resp
@@ -346,7 +361,11 @@ PYEOF
 # weather prompt so an unrelated PROMPT cannot make a correct answer look wrong.
 aiModelTestToolCall() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "aiModelTestToolCall <engine> <model>" "$(_hintEngine)" "$(_hintModel)" "result  : sets R_toolcall to PASS / FLAKY / FAIL"
+        aiStackUsage "aiModelTestToolCall <engine> <model>" \
+            "$(_hintEngine)" \
+            "$(_hintModel)" \
+            "result  : sets R_toolcall to PASS / FLAKY / FAIL" \
+            "$(_hintExamples aiModelTestToolCall engine-model)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" served payload resp attempt
@@ -388,7 +407,8 @@ PYEOF
 # argument, 1 when the model answered in prose instead (and prints what it said).
 aiModelTestToolCallParse() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "aiModelTestToolCallParse <response-json>" "internal: judges one /v1/chat/completions reply for a tool call"
+        aiStackUsage "aiModelTestToolCallParse <response-json>" \
+            "internal: judges one /v1/chat/completions reply for a tool call" 'example : aiModelTestToolCallParse "$(cat reply.json)"  # pass the JSON as one argument'
         return 2
     fi
     python3 - "$1" <<'PYEOF'
@@ -422,7 +442,11 @@ PYEOF
 # Under 32k an agent's system prompt alone overflows — the classic silent fault.
 aiModelTestContext() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "aiModelTestContext <engine> <model>" "$(_hintEngine)" "$(_hintModel)" "result  : sets R_context; MLX-LM cannot report it (WARN)"
+        aiStackUsage "aiModelTestContext <engine> <model>" \
+            "$(_hintEngine)" \
+            "$(_hintModel)" \
+            "result  : sets R_context; MLX-LM cannot report it (WARN)" \
+            "$(_hintExamples aiModelTestContext engine-model)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" ctx=0 host
@@ -471,7 +495,11 @@ except Exception: print(0)' 2>/dev/null)
 # suite without re-asking any of the selection questions.
 aiModelTestRun() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "aiModelTestRun <engine> <model>" "$(_hintEngine)" "$(_hintModel)" "runs    : tests 2-5; serve the model first (aiModelTestEnsureServing)"
+        aiStackUsage "aiModelTestRun <engine> <model>" \
+            "$(_hintEngine)" \
+            "$(_hintModel)" \
+            "runs    : tests 2-5; serve the model first (aiModelTestEnsureServing)" \
+            "$(_hintExamples aiModelTestRun engine-model)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}"

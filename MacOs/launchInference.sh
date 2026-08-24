@@ -123,6 +123,72 @@ ollama_installed()   { command -v ollama >/dev/null 2>&1; }
 # Empty when offline, which the network selector treats as localhost-only.
 lan_ip() { ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null; }
 
+# Engines installed on this machine, regardless of whether they hold models.
+# Args: none. Prints a space-separated list, empty when none are installed.
+_enginesInstalled() {
+    local e=""
+    llamacpp_installed && e="${e} Llama.cpp"
+    mlxml_installed    && e="${e} MLX-LM"
+    ollama_installed   && e="${e} Ollama"
+    echo "${e# }"
+}
+
+# The install function that downloads models for one engine.
+# Args: <engine>. Prints the function name, so the guidance can be pasted.
+_modelInstallerFor() {
+    case "$1" in
+        Llama.cpp) echo "installAiStackLlamacppModels" ;;
+        MLX-LM)    echo "installAiStackMlxmlModels" ;;
+        Ollama)    echo "installAiStackOllamaModels" ;;
+    esac
+}
+
+# Build "example :" help lines from what is ACTUALLY installed — one per usable
+# engine, so every example shown can be pasted and will run.
+# Args: <function-name> <shape> [agent]
+#   shape: engine | engine-host | engine-model | engine-model-ctx |
+#          engine-model-ctx-bind | agent-engine-model
+#   agent: restrict to engines that agent supports (Claude -> Ollama only)
+# When nothing is possible it says why and gives the exact command that fixes
+# it: install an engine, or download models for the engines you already have.
+_hintExamples() {
+    local fn="$1" shape="$2" agent="${3:-}" e m out="" any=0 pad="\n         "
+    for e in $(enginesWithModels); do
+        [ -n "$agent" ] && { agent_supports_engine "$agent" "$e" || continue; }
+        m=$(engineListInstalled "$e" | head -1)
+        [ -z "$m" ] && continue
+        [ "$any" = "1" ] && out="${out}${pad}"
+        any=1
+        case "$shape" in
+            engine)                out="${out}example : ${fn} ${e}" ;;
+            engine-host)           out="${out}example : ${fn} ${e} 127.0.0.1" ;;
+            engine-model)          out="${out}example : ${fn} ${e} ${m}" ;;
+            engine-model-ctx)      out="${out}example : ${fn} ${e} ${m} 32768" ;;
+            engine-model-ctx-bind) out="${out}example : ${fn} ${e} ${m} 32768 127.0.0.1" ;;
+            agent-engine-model)    out="${out}example : ${fn} ${agent:-Pi} ${e} ${m}" ;;
+        esac
+    done
+    if [ "$any" = "1" ]; then printf '%b' "$out"; return 0; fi
+
+    local inst; inst=$(_enginesInstalled)
+    if [ -z "$inst" ]; then
+        printf '%b' "example : none possible yet — no engine is installed.${pad}install one:  installAiStackLlamacppEngine   (llama.cpp, recommended)${pad}              installAiStackMlxmlEngine      (MLX-LM)${pad}              installAiStackOllamaEngine     (Ollama — required by Claude Code)"
+        return 0
+    fi
+    if [ -n "$agent" ]; then
+        local okeng="" x
+        for x in $inst; do agent_supports_engine "$agent" "$x" && okeng="${okeng} ${x}"; done
+        if [ -z "$okeng" ]; then
+            printf '%b' "example : none possible — ${agent} works with none of your engines (${inst}).${pad}$(agent_reason "$agent")"
+            return 0
+        fi
+        inst="${okeng# }"
+    fi
+    out="example : none possible yet — no models downloaded for: ${inst}"
+    for e in $inst; do out="${out}${pad}download them:  $(_modelInstallerFor "$e")   (for ${e})"; done
+    printf '%b' "$out"
+}
+
 # Print a usage message for a step called with missing arguments, return 2.
 # Args: <signature> [detail lines...]. Every step is individually callable from
 # the shell, so a bare call has to explain itself instead of emitting a raw
@@ -140,8 +206,14 @@ aiStackUsage() {
 # Help lines resolved live, so they name what THIS machine actually has rather
 # than a generic placeholder.
 _hintEngine() {
-    local e; e=$(enginesWithModels | tr '\n' ' ' | sed 's/ $//')
-    echo "engine  : ${e:-none installed — run ./install.sh}"
+    local e i
+    e=$(enginesWithModels | tr '\n' ' ' | sed 's/ $//')
+    [ -n "$e" ] && { echo "engine  : ${e}"; return 0; }
+    # distinguish "nothing installed" from "installed but empty" — different
+    # problems with different fixes
+    i=$(_enginesInstalled)
+    if [ -n "$i" ]; then echo "engine  : ${i}  (installed, but no models downloaded yet)"
+    else echo "engine  : none installed — run ./install.sh"; fi
 }
 _hintModel() {
     echo "model   : one of that engine's models — list: engineListInstalled <engine>"
@@ -175,7 +247,9 @@ agent_supports_engine() {   # $1 agent, $2 engine
 # the option was withheld deliberately rather than forgotten.
 agent_reason() {            # why an agent cannot be used with an engine
     if [ $# -lt 1 ]; then
-        aiStackUsage "agent_reason <agent>" "agent   : Pi | OpenCode | Claude"
+        aiStackUsage "agent_reason <agent>" \
+            "agent   : Pi | OpenCode | Claude" \
+            "$(echo 'example : agent_reason Claude')"
         return 2
     fi
     case "$1" in
@@ -188,7 +262,9 @@ agent_reason() {            # why an agent cannot be used with an engine
 # Args: <engine>. Fixed per engine so several scripts agree without config.
 engine_port() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "engine_port <engine>" "engine  : Llama.cpp | MLX-LM | Ollama" "example : engine_port Ollama   -> 11434"
+        aiStackUsage "engine_port <engine>" \
+            "engine  : Llama.cpp | MLX-LM | Ollama" \
+            "$(_hintExamples engine_port engine)"
         return 2
     fi
     case "$1" in
@@ -203,7 +279,10 @@ engine_port() {
 # "port open" as "ready" makes the first request fail.
 engine_up() {   # $1 engine, $2 host — is it up AND ready to infer?
     if [ $# -lt 2 ]; then
-        aiStackUsage "engine_up <engine> <host>" "engine  : Llama.cpp | MLX-LM | Ollama" "host    : 127.0.0.1 or a LAN IP"
+        aiStackUsage "engine_up <engine> <host>" \
+            "engine  : Llama.cpp | MLX-LM | Ollama" \
+            "host    : 127.0.0.1 or a LAN IP" \
+            "$(_hintExamples engine_up engine-host)"
         return 2
     fi
     local p; p=$(engine_port "$1")
@@ -315,7 +394,9 @@ enginesWithModels() {
 # Args: <engine>. Dispatches to the per-engine lister so callers stay generic.
 engineListInstalled() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "engineListInstalled <engine>" "engine  : Llama.cpp | MLX-LM | Ollama"
+        aiStackUsage "engineListInstalled <engine>" \
+            "engine  : Llama.cpp | MLX-LM | Ollama" \
+            "$(_hintExamples engineListInstalled engine)"
         return 2
     fi
     case "$1" in
@@ -330,7 +411,10 @@ engineListInstalled() {
 # 'ollama list' as appropriate. Feeds the context and fit calculations.
 engineModelSizeGb() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "engineModelSizeGb <engine> <model>" "engine  : Llama.cpp | MLX-LM | Ollama" "model   : a tag for that engine — list: engineListInstalled <engine>"
+        aiStackUsage "engineModelSizeGb <engine> <model>" \
+            "engine  : Llama.cpp | MLX-LM | Ollama" \
+            "model   : a tag for that engine — list: engineListInstalled <engine>" \
+            "$(_hintExamples engineModelSizeGb engine-model)"
         return 2
     fi
     local engine="$1" tag="$2" f d
@@ -429,7 +513,9 @@ launchInferenceEngineSelector() {
 # model it is announced and used — a question with one answer is not a choice.
 launchInferenceModelSelector() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "launchInferenceModelSelector <engine>" "$(_hintEngine)" "example : launchInferenceModelSelector Ollama"
+        aiStackUsage "launchInferenceModelSelector <engine>" \
+            "$(_hintEngine)" \
+            "$(_hintExamples launchInferenceModelSelector engine)"
         return 2
     fi
     local engine="${1:-}" models=() m
@@ -472,7 +558,10 @@ launchInferenceModelSelector() {
 # Ollama it also hides anything above the model's own ceiling from /api/show.
 launchInferenceContextSelector() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "launchInferenceContextSelector <engine> <model>" "$(_hintEngine)" "$(_hintModel)" "example : launchInferenceContextSelector Ollama qwen3.6:35b-a3b"
+        aiStackUsage "launchInferenceContextSelector <engine> <model>" \
+            "$(_hintEngine)" \
+            "$(_hintModel)" \
+            "$(_hintExamples launchInferenceContextSelector engine-model)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" size_gb gpu_gb total_gb limit_mb
@@ -549,7 +638,10 @@ except Exception: print(0)' 2>/dev/null)
 # non-private address, and warns that LAN mode is open to the whole network.
 launchInferenceNetworkSelector() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "launchInferenceNetworkSelector <engine>" "$(_hintEngine)" "prints  : the bind address (127.0.0.1 or your LAN IP)"
+        aiStackUsage "launchInferenceNetworkSelector <engine>" \
+            "$(_hintEngine)" \
+            "prints  : the bind address (127.0.0.1 or your LAN IP)" \
+            "$(_hintExamples launchInferenceNetworkSelector engine)"
         return 2
     fi
     local engine="${1:-}" ip def sel
@@ -587,7 +679,10 @@ launchInferenceNetworkSelector() {
 # itself; none leaves the server running and says what would have worked.
 launchInferenceAgentSelector() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "launchInferenceAgentSelector <engine>" "$(_hintEngine)" "prints  : Pi | OpenCode | Claude | none, filtered by compatibility"
+        aiStackUsage "launchInferenceAgentSelector <engine>" \
+            "$(_hintEngine)" \
+            "prints  : Pi | OpenCode | Claude | none, filtered by compatibility" \
+            "$(_hintExamples launchInferenceAgentSelector engine)"
         return 2
     fi
     local engine="${1:-}" all=() usable=() blocked=() a
@@ -774,7 +869,11 @@ launchInferenceFreeResources() {
 # Runs before anything is loaded, because discovering it afterwards means swap.
 launchInferencePrerequisites() {
     if [ $# -lt 3 ]; then
-        aiStackUsage "launchInferencePrerequisites <engine> <model> <context-tokens>" "$(_hintEngine)" "$(_hintModel)" "context : tokens, e.g. 32768 / 65536 / 131072" "example : launchInferencePrerequisites Ollama qwen3.6:35b-a3b 32768"
+        aiStackUsage "launchInferencePrerequisites <engine> <model> <context-tokens>" \
+            "$(_hintEngine)" \
+            "$(_hintModel)" \
+            "context : tokens, e.g. 32768 / 65536 / 131072" \
+            "$(_hintExamples launchInferencePrerequisites engine-model-ctx)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" ctx="${3:-}" size_gb kv need gpu_gb total_gb limit_mb avail
@@ -806,7 +905,12 @@ launchInferencePrerequisites() {
 # Sets LAUNCH_ENDPOINT, which the agent step consumes.
 launchInferenceStart() {
     if [ $# -lt 4 ]; then
-        aiStackUsage "launchInferenceStart <engine> <model> <context-tokens> <bind-address>" "$(_hintEngine)" "$(_hintModel)" "context : tokens, e.g. 32768" "bind    : 127.0.0.1 (local) or this Mac's LAN IP" "example : launchInferenceStart Ollama qwen3.6:35b-a3b 32768 127.0.0.1"
+        aiStackUsage "launchInferenceStart <engine> <model> <context-tokens> <bind-address>" \
+            "$(_hintEngine)" \
+            "$(_hintModel)" \
+            "context : tokens, e.g. 32768" \
+            "bind    : 127.0.0.1 (local) or this Mac's LAN IP" \
+            "$(_hintExamples launchInferenceStart engine-model-ctx-bind)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" ctx="${3:-}" bind="${4:-}" port
@@ -903,7 +1007,12 @@ except Exception: print("")' 2>/dev/null
 # prints the endpoint and stops when the agent is "none".
 launchInferenceStartAgent() {
     if [ $# -lt 3 ]; then
-        aiStackUsage "launchInferenceStartAgent <agent> <engine> <model>" "agent   : Pi | OpenCode | Claude | none" "$(_hintEngine)" "$(_hintModel)" "note    : needs LAUNCH_ENDPOINT set by launchInferenceStart"
+        aiStackUsage "launchInferenceStartAgent <agent> <engine> <model>" \
+            "agent   : Pi | OpenCode | Claude | none" \
+            "$(_hintEngine)" \
+            "$(_hintModel)" \
+            "note    : needs LAUNCH_ENDPOINT set by launchInferenceStart" \
+            "$(_hintExamples launchInferenceStartAgent agent-engine-model)"
         return 2
     fi
     local agent="${1:-}" engine="${2:-}" model="${3:-}" endpoint="${LAUNCH_ENDPOINT:-}"
@@ -926,7 +1035,10 @@ launchInferenceStartAgent() {
 # one exists, and offers continue/resume when this directory has sessions.
 launchInferenceAgentClaude() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "launchInferenceAgentClaude <engine> <model>" "engine  : Ollama only — Claude Code needs the Anthropic API" "model   : a tag for that engine — list: engineListInstalled <engine>"
+        aiStackUsage "launchInferenceAgentClaude <engine> <model>" \
+            "engine  : Ollama only — Claude Code needs the Anthropic API" \
+            "model   : a tag for that engine — list: engineListInstalled <engine>" \
+            "$(_hintExamples launchInferenceAgentClaude engine-model Claude)"
         return 2
     fi
     local engine="$1" model="$2" endpoint="${LAUNCH_ENDPOINT:-}"
@@ -969,7 +1081,10 @@ launchInferenceAgentClaude() {
 # itself, so the model is picked inside Pi with /models.
 launchInferenceAgentPi() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "launchInferenceAgentPi <engine> <model>" "engine  : Llama.cpp | MLX-LM | Ollama" "model   : a tag for that engine — list: engineListInstalled <engine>"
+        aiStackUsage "launchInferenceAgentPi <engine> <model>" \
+            "engine  : Llama.cpp | MLX-LM | Ollama" \
+            "model   : a tag for that engine — list: engineListInstalled <engine>" \
+            "$(_hintExamples launchInferenceAgentPi engine-model Pi)"
         return 2
     fi
     local engine="$1" model="$2" endpoint="${LAUNCH_ENDPOINT:-}" cfg="$HOME/.pi/agent/local-models.json"
@@ -995,7 +1110,10 @@ launchInferenceAgentPi() {
 # else — keyed by the id the endpoint really advertises.
 launchInferenceAgentOpenCode() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "launchInferenceAgentOpenCode <engine> <model>" "engine  : Llama.cpp | MLX-LM | Ollama" "model   : a tag for that engine — list: engineListInstalled <engine>"
+        aiStackUsage "launchInferenceAgentOpenCode <engine> <model>" \
+            "engine  : Llama.cpp | MLX-LM | Ollama" \
+            "model   : a tag for that engine — list: engineListInstalled <engine>" \
+            "$(_hintExamples launchInferenceAgentOpenCode engine-model OpenCode)"
         return 2
     fi
     local engine="$1" model="$2" endpoint="${LAUNCH_ENDPOINT:-}" cfg="$HOME/.config/opencode/opencode.json" mid

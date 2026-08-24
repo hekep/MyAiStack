@@ -58,6 +58,41 @@ warn()  { echo "${YELLOW} ! ${RESET} $*"; }
 # Print an error line for something that was attempted and failed.
 fail()  { echo "${RED} ✗ ${RESET} $*"; }
 
+# A real, pasteable tag for one engine — an installed model if there is one,
+# otherwise the smallest entry from that engine's catalog.
+# Args: <engine>. Prints nothing when neither is available.
+_liveTagFor() {
+    local engine="$1" t f
+    case "$engine" in
+        Ollama)    t=$(ollamaListInstalled 2>/dev/null | head -1) ;;
+        Llama.cpp) t=$(llamacppListInstalled 2>/dev/null | head -1) ;;
+        MLX-LM)    t=$(mlxmlListInstalled 2>/dev/null | head -1) ;;
+    esac
+    [ -n "$t" ] && { echo "$t"; return 0; }
+    f=$(MODEL_LIST_ENGINE="$engine" modelListFile "$(( $(sysctl -n hw.memsize) / 1073741824 ))" 2>/dev/null)
+    [ -f "$f" ] && python3 -c '
+import json,sys
+try:
+    ms=json.load(open(sys.argv[1]))["models"]
+    print(sorted(ms, key=lambda m: m["size_gb"])[0]["tag"])
+except Exception: pass' "$f"
+}
+
+# Build an "example :" line for the install-side helpers from live data, and
+# say what to install first when there is nothing to point at.
+# Args: <function-name> <kind>  (kind: ollama-tag | gguf-tag | mlx-repo | any)
+_hintTagExample() {
+    local fn="$1" kind="$2" t pad="\n         "
+    case "$kind" in
+        ollama-tag) t=$(_liveTagFor Ollama) ;;
+        gguf-tag)   t=$(_liveTagFor Llama.cpp) ;;
+        mlx-repo)   t=$(_liveTagFor MLX-LM) ;;
+        *)          t=$(_liveTagFor Ollama); [ -z "$t" ] && t=$(_liveTagFor Llama.cpp) ;;
+    esac
+    if [ -n "$t" ]; then printf '%s' "example : ${fn} ${t}"; return 0; fi
+    printf '%b' "example : none possible yet — nothing installed and no catalog to read.${pad}install an engine:  installAiStackLlamacppEngine   (or ...MlxmlEngine / ...OllamaEngine)${pad}then models:        installAiStackLlamacppModels   (or ...MlxmlModels / ...OllamaModels)"
+}
+
 # Print a usage message for a function called without its arguments, return 2.
 # Args: <signature> [detail lines...]. Anything here can be called standalone
 # from a shell, so a bare call must explain itself rather than misbehave.
@@ -123,14 +158,16 @@ free_gb() { df -g /System/Volumes/Data | awk 'NR==2 {print $4}'; }
 TAG_CACHE_DIR="$HOME/.cache/ollama-tag-check"
 # Path of the cache entry for one model tag's availability probe.
 # Args: <tag>. Slashes and colons become underscores so any tag is a filename.
-tag_cache_file() { [ $# -ge 1 ] || { aiStackUsage "tag_cache_file <tag>" "example : tag_cache_file qwen3.6:35b-a3b"; return 2; }; echo "$TAG_CACHE_DIR/$(echo "$1" | tr ':/' '__')"; }
+tag_cache_file() { [ $# -ge 1 ] || { aiStackUsage "tag_cache_file <tag>" "$(_hintTagExample tag_cache_file any)"; return 2; }; echo "$TAG_CACHE_DIR/$(echo "$1" | tr ':/' '__')"; }
 # Probe whether one model tag exists upstream, caching the result for 24 h.
 # Args: <tag>. A tag containing "/" is a HuggingFace repo, otherwise an Ollama
 # registry tag. Meant to be run in parallel for a whole menu; the cache makes
 # the first render ~2 s and every later one instant.
 tag_check_prefetch() {   # probe one tag and cache the HTTP status
     if [ $# -lt 1 ]; then
-        aiStackUsage "tag_check_prefetch <tag>" "tag     : ollama tag, or org/repo[:quant] for HuggingFace"
+        aiStackUsage "tag_check_prefetch <tag>" \
+            "tag     : ollama tag, or org/repo[:quant] for HuggingFace" \
+            "$(_hintTagExample tag_check_prefetch any)"
         return 2
     fi
     local f code name="${1%%:*}" t="${1#*:}" url
@@ -149,7 +186,9 @@ tag_check_prefetch() {   # probe one tag and cache the HTTP status
 # offer a model and fail at download than to hide everything while offline.
 tag_available() {        # 200 = exists; 000/empty (offline) = benefit of the doubt
     if [ $# -lt 1 ]; then
-        aiStackUsage "tag_available <tag>" "run tag_check_prefetch <tag> first"
+        aiStackUsage "tag_available <tag>" \
+            "run tag_check_prefetch <tag> first" \
+            "$(_hintTagExample tag_available any)"
         return 2
     fi
     local c
@@ -207,7 +246,7 @@ ollama_server_up() { curl -sf "http://${OLLAMA_API}:11434/api/version" >/dev/nul
 lan_ip() { ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null; }
 
 # True when Ollama already has this exact tag. Args: <tag>.
-model_installed() { [ $# -ge 1 ] || { aiStackUsage "model_installed <ollama-tag>" "example : model_installed qwen2.5-coder:7b"; return 2; }; ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$1"; }
+model_installed() { [ $# -ge 1 ] || { aiStackUsage "model_installed <ollama-tag>" "$(_hintTagExample model_installed ollama-tag)"; return 2; }; ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$1"; }
 
 # ---------- engine detection --------------------------------------------------
 # True when llama.cpp is installed (llama-cli or llama-server on PATH).
@@ -658,7 +697,8 @@ ollamaListInstalled() {
 # data while cleaning up after a permanent failure.
 ollamaPullModel() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "ollamaPullModel <ollama-tag>" "example : ollamaPullModel qwen2.5-coder:3b"
+        aiStackUsage "ollamaPullModel <ollama-tag>" \
+            "$(_hintTagExample ollamaPullModel ollama-tag)"
         return 2
     fi
     local tag="$1" pull_log attempt ok_pull=0 last_err=""
@@ -701,7 +741,9 @@ LLAMACPP_MODEL_DIR="${LLAMACPP_MODEL_DIR:-$HOME/Models/llama.cpp}"
 # on disk back into tags without keeping a separate index.
 llamacppLocalFile() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "llamacppLocalFile <tag>" "tag     : hf-repo:QUANT"
+        aiStackUsage "llamacppLocalFile <tag>" \
+            "tag     : hf-repo:QUANT" \
+            "$(_hintTagExample llamacppLocalFile gguf-tag)"
         return 2
     fi
     echo "${LLAMACPP_MODEL_DIR}/$(printf '%s' "$1" | sed 's|/|__|g; s|:|@|').gguf"
@@ -722,7 +764,9 @@ llamacppListInstalled() {
 # download resumes instead of restarting — the thing Ollama's HF path cannot do.
 llamacppPullModel() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "llamacppPullModel <tag>" "tag     : hf-repo:QUANT — downloads the GGUF into ~/Models/llama.cpp"
+        aiStackUsage "llamacppPullModel <tag>" \
+            "tag     : hf-repo:QUANT — downloads the GGUF into ~/Models/llama.cpp" \
+            "$(_hintTagExample llamacppPullModel gguf-tag)"
         return 2
     fi
     # NB: separate statements on purpose. bash expands every argument to
@@ -786,7 +830,8 @@ mlxmlListInstalled() {
 # installed permanently, and already-fetched shards resume.
 mlxmlPullModel() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "mlxmlPullModel <hf-repo>" "example : mlxmlPullModel mlx-community/Qwen3.6-35B-A3B-4bit"
+        aiStackUsage "mlxmlPullModel <hf-repo>" \
+            "$(_hintTagExample mlxmlPullModel mlx-repo)"
         return 2
     fi
     local tag="$1"
@@ -814,7 +859,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 # modelListFile <host_ram_gb> — largest tier <= host RAM (smallest if below all)
 modelListFile() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "modelListFile <host-ram-gb>" "example : modelListFile 48"
+        aiStackUsage "modelListFile <host-ram-gb>" "example : modelListFile $(( $(sysctl -n hw.memsize) / 1073741824 ))"
         return 2
     fi
     local ram="$1" dir f tier best="" smallest=""

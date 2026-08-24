@@ -62,7 +62,7 @@ aiStackUsage() {
 # something.
 ask() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "ask <question>" "no default — every step here deletes something"
+        aiStackUsage "ask <question>" "no default — every step here deletes something" "example : ask \"Delete ~/.codex?\""
         return 2
     fi
     local answer
@@ -94,7 +94,7 @@ START_KB=$(free_kb)
 # free total. Keychain steps legitimately report ~0: they hold no disk space.
 gain() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "gain <free-kb-before>" "example : b=$(free_kb); rm -rf x; gain "$b""
+        aiStackUsage "gain <free-kb-before>" 'example : b=$(free_kb); rm -rf something; gain "$b"'
         return 2
     fi
     local d=$(( $(free_kb) - $1 ))

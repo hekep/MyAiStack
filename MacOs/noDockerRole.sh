@@ -60,7 +60,7 @@ aiStackUsage() {
 # script is deliberate, so Enter alone is not accepted as consent.
 ask() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "ask <question>" "no default — every step here deletes something"
+        aiStackUsage "ask <question>" "no default — every step here deletes something" "example : ask \"Delete the VM disk?\""
         return 2
     fi
     local answer
@@ -96,7 +96,7 @@ START_KB=$(free_kb)
 # Measured from df on purpose: du estimates lie when files are still open.
 gain() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "gain <free-kb-before>" "example : b=$(free_kb); rm -rf x; gain "$b""
+        aiStackUsage "gain <free-kb-before>" 'example : b=$(free_kb); rm -rf something; gain "$b"'
         return 2
     fi
     local d=$(( $(free_kb) - $1 ))

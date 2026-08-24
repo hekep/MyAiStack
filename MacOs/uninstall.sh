@@ -69,7 +69,7 @@ aiStackUsage() {
 # terminal at all. Returns 0 for yes, 1 for no, with no Enter-default.
 ask() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "ask <question>" "no default — answer y or n explicitly"
+        aiStackUsage "ask <question>" "no default — answer y or n explicitly" "example : ask \"Remove the model?\""
         return 2
     fi
     local answer

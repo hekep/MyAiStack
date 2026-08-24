@@ -93,7 +93,11 @@ freeMemGb() {
 # model is resident, so the generous KV allowance would cause false skips.
 modelFitsNow() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "modelFitsNow <engine> <model>" "engine  : Llama.cpp | MLX-LM | Ollama" "model   : a tag for that engine — list: engineListInstalled <engine>" "true when weights + 4 GB fits the GPU budget"
+        aiStackUsage "modelFitsNow <engine> <model>" \
+            "engine  : Llama.cpp | MLX-LM | Ollama" \
+            "model   : a tag for that engine — list: engineListInstalled <engine>" \
+            "true when weights + 4 GB fits the GPU budget" \
+            "$(_hintExamples modelFitsNow engine-model)"
         return 2
     fi
     local engine="$1" model="$2" size need gpu limit total
