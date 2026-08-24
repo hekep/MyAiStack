@@ -1,4 +1,4 @@
-# Docs — AI_Code_generator scripts
+# Docs — MyAiStack scripts
 
 Documentation for the shell scripts in this repo. Each doc covers **what the
 script does, how it works, and why it is necessary**.

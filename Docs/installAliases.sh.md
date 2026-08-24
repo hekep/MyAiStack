@@ -31,10 +31,10 @@ noRole Docker
 `~/.bashrc` (your login shell's rc, plus any other that already exists):
 
 ```bash
-# >>> AI_Code_generator >>>
-export AI_STACK_HOME="/path/to/AI_Code_generator"
+# >>> MyAiStack >>>
+export AI_STACK_HOME="/path/to/MyAiStack"
 [ -f "${AI_STACK_HOME}/shellFunctions.sh" ] && . "${AI_STACK_HOME}/shellFunctions.sh"
-# <<< AI_Code_generator <<<
+# <<< MyAiStack <<<
 ```
 
 - **Idempotent** — the markers mean a re-run replaces the block instead of

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# common.sh — shared code for the AI_Code_generator toolkit.
+# common.sh — shared code for the MyAiStack toolkit.
 #
 # Sourced by the thin wrapper scripts in the repo root. Each wrapper detects
 # the host OS and dispatches to the real implementation in the OS-specific

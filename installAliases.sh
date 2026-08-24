@@ -41,8 +41,12 @@ ask_def() {
 }
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-BEGIN="# >>> AI_Code_generator >>>"
-END="# <<< AI_Code_generator <<<"
+BEGIN="# >>> MyAiStack >>>"
+END="# <<< MyAiStack <<<"
+# the project was called MyAiStack before; an rc written back then is
+# still cleaned up, so a rename cannot leave two blocks behind
+LEGACY_BEGIN="# >>> AI_Code_generator >>>"
+LEGACY_END="# <<< AI_Code_generator <<<"
 
 # Which rc files to touch: the one for your login shell, plus any other that
 # already exists, so the functions are there whichever shell you land in.
@@ -77,16 +81,16 @@ BLOCK
 rcStrip() {
     local rc="$1"
     [ -f "$rc" ] || return 0
-    grep -q "^${BEGIN}$" "$rc" 2>/dev/null || return 0
-    python3 - "$rc" "$BEGIN" "$END" <<'PYEOF'
+    grep -qE "^(${BEGIN}|${LEGACY_BEGIN})$" "$rc" 2>/dev/null || return 0
+    python3 - "$rc" "$BEGIN" "$END" "$LEGACY_BEGIN" "$LEGACY_END" <<'PYEOF'
 import sys
-rc, begin, end = sys.argv[1:4]
+rc, begin, end, lbegin, lend = sys.argv[1:6]
 out, skip = [], False
 for line in open(rc):
     s = line.rstrip("\n")
-    if s == begin: skip = True; continue
-    if s == end:   skip = False; continue
-    if not skip:   out.append(line)
+    if s in (begin, lbegin): skip = True; continue
+    if s in (end, lend):     skip = False; continue
+    if not skip:             out.append(line)
 while out and out[-1].strip() == "": out.pop()
 open(rc, "w").write("".join(out) + ("\n" if out else ""))
 PYEOF
@@ -113,7 +117,7 @@ if [ "${1:-}" = "--remove" ]; then
     info "installAliases.sh --remove — taking the block out of your shell rc"
     found=0
     for rc in $(rcCandidates | sort -u); do
-        if [ -f "$rc" ] && grep -q "^${BEGIN}$" "$rc" 2>/dev/null; then
+        if [ -f "$rc" ] && grep -qE "^(${BEGIN}|${LEGACY_BEGIN})$" "$rc" 2>/dev/null; then
             cp "$rc" "${rc}.aiStack.bak"
             rcStrip "$rc"
             ok "Removed from ${rc} (backup: $(basename "$rc").aiStack.bak)"
@@ -156,7 +160,7 @@ TARGETS=$(rcCandidates | sort -u)
 echo
 echo "    Files to update:"
 for rc in $TARGETS; do
-    if [ -f "$rc" ] && grep -q "^${BEGIN}$" "$rc" 2>/dev/null; then
+    if [ -f "$rc" ] && grep -qE "^(${BEGIN}|${LEGACY_BEGIN})$" "$rc" 2>/dev/null; then
         echo "      ${rc}  (existing block will be replaced)"
     else
         echo "      ${rc}"

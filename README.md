@@ -1,4 +1,4 @@
-# AI_Code_generator
+# MyAiStack
 
 A local AI coding stack for Apple Silicon: pick an inference **engine**, pull
 **models** that actually fit your machine, launch one with a sane context size,
@@ -6,8 +6,8 @@ and hand it to a **coding agent** — each step interactive, re-runnable, and
 honest about what it measures.
 
 ```bash
-git clone <your-fork-url> AI_Code_generator
-cd AI_Code_generator
+git clone https://github.com/hekep/MyAiStack.git
+cd MyAiStack
 ./install.sh
 ```
 
