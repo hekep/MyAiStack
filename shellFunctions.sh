@@ -6,7 +6,7 @@
 # Sourced from ~/.zshrc or ~/.bashrc by installAliases.sh. After that, every
 # public step is callable from anywhere:
 #
-#   installAiStackOllamaModels      # just the Ollama download menu
+#   aistackInstallOllamaModels      # just the Ollama download menu
 #   launchInferenceKillPrevious     # free the GPU without a full launch
 #   aiModelTest Ollama qwen3.6:35b-a3b
 #   uninstallAiStackPiCodingAgent
@@ -79,7 +79,7 @@ aiStackUsage() {
 # guarantees bash semantics; the terminal is inherited, so prompts still work.
 _aiStackRun() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "_aiStackRun <script> <function> [args...]" "script   : absolute path to a MacOs/*.sh implementation" "function : a function defined in it" "example  : _aiStackRun $AI_STACK_OS_DIR/install.sh installAiStackVerification"
+        aiStackUsage "_aiStackRun <script> <function> [args...]" "script   : absolute path to a MacOs/*.sh implementation" "function : a function defined in it" "example  : _aiStackRun $AI_STACK_OS_DIR/install.sh aistackInstallVerification"
         return 2
     fi
     local script="$1" func="$2"
@@ -100,7 +100,7 @@ _aiStackRun() {
 # adding a step to a script makes it available in the shell with no extra work.
 _aiStackDefine() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "_aiStackDefine <script> <name-prefix>" "example  : _aiStackDefine $AI_STACK_OS_DIR/install.sh installAiStack"
+        aiStackUsage "_aiStackDefine <script> <name-prefix>" "example  : _aiStackDefine $AI_STACK_OS_DIR/install.sh aistackInstall"
         return 2
     fi
     local script="$1" prefix="$2" fn
@@ -113,7 +113,7 @@ _aiStackDefine() {
 
 AI_STACK_FUNCS=""
 if [ -n "$AI_STACK_OS_DIR" ]; then
-    _aiStackDefine "${AI_STACK_OS_DIR}/install.sh"         installAiStack
+    _aiStackDefine "${AI_STACK_OS_DIR}/install.sh"         aistackInstall
     _aiStackDefine "${AI_STACK_OS_DIR}/uninstall.sh"       uninstallAiStack
     _aiStackDefine "${AI_STACK_OS_DIR}/launchInference.sh" launchInference
     _aiStackDefine "${AI_STACK_OS_DIR}/aiModelTest.sh"     aiModelTest
@@ -134,7 +134,7 @@ aiStackHelp() {
         return 1
     fi
     local group
-    for group in installAiStack uninstallAiStack launchInference aiModelTest; do
+    for group in aistackInstall uninstallAiStack launchInference aiModelTest; do
         echo
         echo "  ${group}*"
         # shellcheck disable=SC2086

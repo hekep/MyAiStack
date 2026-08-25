@@ -1,7 +1,7 @@
 # MLX-LM model lists
 
 Catalogs for the **MLX-LM** engine (`uv tool install mlx-lm`), loaded by
-`installAiStackMlxmlModels` via `MODEL_LIST_ENGINE=MLX-LM`.
+`aistackInstallMlxmlModels` via `MODEL_LIST_ENGINE=MLX-LM`.
 
 Tiers provided: `24`, `32`, `48`, `64` GB. Hosts with more RAM load the 64 GB
 list until verified larger entries are added. MLX is Apple-silicon only, so

@@ -169,7 +169,7 @@ fi
 COUNT=$(AI_STACK_HOME="$REPO" bash -c '. "$0/shellFunctions.sh" >/dev/null 2>&1; echo $AI_STACK_FUNCS' "$REPO" | wc -w | tr -d ' ')
 info "Repo: ${REPO}"
 if [ "${COUNT:-0}" -gt 0 ]; then
-    ok "${COUNT} step functions would become available (installAiStack*, uninstallAiStack*, launchInference*, aiModelTest*, testAllAiModels, noRole, aiStackHelp)."
+    ok "${COUNT} step functions would become available (aistackInstall*, uninstallAiStack*, launchInference*, aiModelTest*, testAllAiModels, noRole, aiStackHelp)."
 else
     warn "No functions resolved — this OS may have no implementations yet."
 fi

@@ -137,9 +137,9 @@ _enginesInstalled() {
 # Args: <engine>. Prints the function name, so the guidance can be pasted.
 _modelInstallerFor() {
     case "$1" in
-        Llama.cpp) echo "installAiStackLlamacppModels" ;;
-        MLX-LM)    echo "installAiStackMlxmlModels" ;;
-        Ollama)    echo "installAiStackOllamaModels" ;;
+        Llama.cpp) echo "aistackInstallLlamacppModels" ;;
+        MLX-LM)    echo "aistackInstallMlxmlModels" ;;
+        Ollama)    echo "aistackInstallOllamaModels" ;;
     esac
 }
 
@@ -177,7 +177,7 @@ _hintExamples() {
 
     local inst; inst=$(_enginesInstalled)
     if [ -z "$inst" ]; then
-        printf '%b' "example : none possible yet — no engine is installed.${pad}install one:  installAiStackLlamacppEngine   (llama.cpp, recommended)${pad}              installAiStackMlxmlEngine      (MLX-LM)${pad}              installAiStackOllamaEngine     (Ollama — required by Claude Code)"
+        printf '%b' "example : none possible yet — no engine is installed.${pad}install one:  aistackInstallLlamacppEngine   (llama.cpp, recommended)${pad}              aistackInstallMlxmlEngine      (MLX-LM)${pad}              aistackInstallOllamaEngine     (Ollama — required by Claude Code)"
         return 0
     fi
     if [ -n "$agent" ]; then
@@ -1054,9 +1054,9 @@ _requireEngine() {
     esac
     fail "${engine} is not installed."
     case "$engine" in
-        Llama.cpp) warn "Install it:  installAiStackLlamacppEngine" ;;
-        MLX-LM)    warn "Install it:  installAiStackMlxmlEngine" ;;
-        Ollama)    warn "Install it:  installAiStackOllamaEngine" ;;
+        Llama.cpp) warn "Install it:  aistackInstallLlamacppEngine" ;;
+        MLX-LM)    warn "Install it:  aistackInstallMlxmlEngine" ;;
+        Ollama)    warn "Install it:  aistackInstallOllamaEngine" ;;
     esac
     return 1
 }
@@ -1086,9 +1086,9 @@ _requireModel() {
 # Args: <agent>. Prints the function name so guidance can be pasted.
 _agentInstallerFor() {
     case "$1" in
-        Pi)       echo "installAiStackPiCodingAgent" ;;
-        OpenCode) echo "installAiStackOpenCodeCodingAgent" ;;
-        Claude)   echo "installAiStackClaudeCodingAgent" ;;
+        Pi)       echo "aistackInstallPiCodingAgent" ;;
+        OpenCode) echo "aistackInstallOpenCodeCodingAgent" ;;
+        Claude)   echo "aistackInstallClaudeCodingAgent" ;;
     esac
 }
 

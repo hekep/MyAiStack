@@ -61,7 +61,7 @@ Each launcher refuses early rather than half-working:
    that *are* ready for that engine, so there is a working alternative:
    ```
    ✗ OpenCode is not installed — nothing to launch.
-   ! Install it:  installAiStackOpenCodeCodingAgent
+   ! Install it:  aistackInstallOpenCodeCodingAgent
    ! Ready to use with Llama.cpp right now: Pi
    ```
 2. **unknown or uninstalled engine** → lists the valid names, and which of
@@ -73,7 +73,7 @@ Each launcher refuses early rather than half-working:
    ! Llama.cpp models you do have:
         bartowski/Qwen2.5-Coder-7B-Instruct-GGUF:Q8_0
         lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q8_0
-   ! Download more with:  installAiStackLlamacppModels
+   ! Download more with:  aistackInstallLlamacppModels
    ```
 4. **agent incompatible with the engine** → says which API is missing.
 5. **nothing serving the engine** → gives the `launchInferenceStart` line for a

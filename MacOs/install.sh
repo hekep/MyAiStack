@@ -2,7 +2,7 @@
 #
 # install.sh — Local AI coding stack installer (universal, function-based)
 #
-# Every step is an independent function, prefixed installAiStack*. Each function
+# Every step is an independent function, prefixed aistackInstall*. Each function
 # checks its own prerequisites and whether the work is already done, and
 # proposes an update when one is available — so the script (or any single
 # function) can be run any number of times.
@@ -10,29 +10,29 @@
 # Steps carrying "Ollama" in the name are engine-specific; the others apply to
 # the stack as a whole (and stay put when other engines are added).
 #
-#   installAiStackSanity          platform + host RAM detection (sets globals)
-#   installAiStackDiskGate        HARD BLOCK until enough free disk
-#   installAiStackHomebrew        Homebrew present / updated
+#   aistackInstallSanity          platform + host RAM detection (sets globals)
+#   aistackInstallDiskGate        HARD BLOCK until enough free disk
+#   aistackInstallHomebrew        Homebrew present / updated
 #   --- engines (at least one required; the wizard stops if none) ---
-#   installAiStackLlamacppEngine  llama.cpp   — default YES; reaches Q5_K_M/Q6_K
-#   installAiStackMlxmlEngine     MLX-LM      — default no; Apple-native, 6-bit
-#   installAiStackOllamaEngine    Ollama      — default no; managed daemon + API
+#   aistackInstallLlamacppEngine  llama.cpp   — default YES; reaches Q5_K_M/Q6_K
+#   aistackInstallMlxmlEngine     MLX-LM      — default no; Apple-native, 6-bit
+#   aistackInstallOllamaEngine    Ollama      — default no; managed daemon + API
 #   --- shared ---
-#   installAiStackUv              uv (pulled in automatically by MLX-LM)
+#   aistackInstallUv              uv (pulled in automatically by MLX-LM)
 #   --- coding agents (what you type into) ---
-#   installAiStackPiCodingAgent        Pi        — default YES; any engine
-#   installAiStackOpenCodeCodingAgent  OpenCode  — default no;  any engine
-#   installAiStackClaudeCodingAgent    Claude    — default no;  Ollama only
+#   aistackInstallPiCodingAgent        Pi        — default YES; any engine
+#   aistackInstallOpenCodeCodingAgent  OpenCode  — default no;  any engine
+#   aistackInstallClaudeCodingAgent    Claude    — default no;  Ollama only
 #   --- models, one step per engine, same order, each skipped if absent ---
-#   installAiStackLlamacppModels  GGUF files -> ~/Models/llama.cpp
-#   installAiStackMlxmlModels     HF repos   -> HuggingFace cache
-#   installAiStackOllamaModels    registry tags -> ~/.ollama
+#   aistackInstallLlamacppModels  GGUF files -> ~/Models/llama.cpp
+#   aistackInstallMlxmlModels     HF repos   -> HuggingFace cache
+#   aistackInstallOllamaModels    registry tags -> ~/.ollama
 #   --- monitoring (optional, macOS-specific) ---
-#   installAiStackMacmonMonitoring     macmon     — default no; CPU/GPU/ANE + memory
-#   installAiStackAnubisMonitoring     Anubis OSS — default no; LLM benchmarking app
-#   installAiStackLitellmMonitoring    LiteLLM  — default no;  proxy logging / OTel
-#   installAiStackVerification    status summary
-#   installAiStack                wrapper — runs all of the above in order
+#   aistackInstallMacmonMonitoring     macmon     — default no; CPU/GPU/ANE + memory
+#   aistackInstallAnubisMonitoring     Anubis OSS — default no; LLM benchmarking app
+#   aistackInstallLitellmMonitoring    LiteLLM  — default no;  proxy logging / OTel
+#   aistackInstallVerification    status summary
+#   aistackInstall                wrapper — runs all of the above in order
 #
 # Serving models (engine choice, context size, network exposure, keeping a
 # model resident) is NOT an install concern — that is launchInference.sh.
@@ -90,7 +90,7 @@ _hintTagExample() {
         *)          t=$(_liveTagFor Ollama); [ -z "$t" ] && t=$(_liveTagFor Llama.cpp) ;;
     esac
     if [ -n "$t" ]; then printf '%s' "example : ${fn} ${t}"; return 0; fi
-    printf '%b' "example : none possible yet — nothing installed and no catalog to read.${pad}install an engine:  installAiStackLlamacppEngine   (or ...MlxmlEngine / ...OllamaEngine)${pad}then models:        installAiStackLlamacppModels   (or ...MlxmlModels / ...OllamaModels)"
+    printf '%b' "example : none possible yet — nothing installed and no catalog to read.${pad}install an engine:  aistackInstallLlamacppEngine   (or ...MlxmlEngine / ...OllamaEngine)${pad}then models:        aistackInstallLlamacppModels   (or ...MlxmlModels / ...OllamaModels)"
 }
 
 # Print a usage message for a function called without its arguments, return 2.
@@ -288,8 +288,8 @@ require_disk() {
 # Step 1: confirm the machine can run this at all, and measure it.
 # Requires Apple Silicon macOS and at least 16 GB RAM. Sets TOTAL_GB and GPU_GB
 # (~75 % of RAM, the default Metal allocation), which size every later menu.
-installAiStackSanity() {
-    info "installAiStackSanity — platform and memory detection"
+aistackInstallSanity() {
+    info "aistackInstallSanity — platform and memory detection"
     if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
         fail "This script targets Apple Silicon macOS. Aborting."
         return 1
@@ -312,8 +312,8 @@ RECOMMENDED_DISK_GB=60
 # Below 25 GB it shows the shortfall and the measured disk hogs, offers to delete
 # local Time Machine snapshots (they pin freed space, making cleanup look
 # useless), and loops on Enter to re-check until the requirement is met.
-installAiStackDiskGate() {
-    info "installAiStackDiskGate — disk space (need >= ${MIN_DISK_GB} GB, ${RECOMMENDED_DISK_GB}+ recommended)"
+aistackInstallDiskGate() {
+    info "aistackInstallDiskGate — disk space (need >= ${MIN_DISK_GB} GB, ${RECOMMENDED_DISK_GB}+ recommended)"
     local have
     while true; do
         have=$(free_gb)
@@ -361,8 +361,8 @@ installAiStackDiskGate() {
 # Step 3: make sure Homebrew is present, offering to install it.
 # Everything below depends on it, so declining ends the wizard rather than
 # producing a half-built stack.
-installAiStackHomebrew() {
-    info "installAiStackHomebrew — package manager"
+aistackInstallHomebrew() {
+    info "aistackInstallHomebrew — package manager"
     if command -v brew >/dev/null 2>&1; then
         ok "Homebrew present: $(brew --version | head -1)"
         return 0
@@ -380,9 +380,9 @@ installAiStackHomebrew() {
 # Its advantages are a managed daemon and the Anthropic API that Claude Code
 # needs; its quant ladder is the narrowest. A standalone Ollama.app is offered
 # the migration to the brew formula, keeping the models in ~/.ollama.
-installAiStackOllamaEngine() {
-    info "installAiStackOllamaEngine — the Ollama runtime"
-    command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew (run installAiStackHomebrew)."; return 1; }
+aistackInstallOllamaEngine() {
+    info "aistackInstallOllamaEngine — the Ollama runtime"
+    command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew (run aistackInstallHomebrew)."; return 1; }
 
     if [ -d "/Applications/Ollama.app" ]; then
         warn "Standalone Ollama.app detected — not brew-managed ('brew upgrade ollama' cannot see it)."
@@ -445,8 +445,8 @@ ollama_ensure_daemon() {
 # Install uv, the Python tool manager MLX-LM is delivered through.
 # Args: [required] to install without asking, used when another step depends on
 # it — you already agreed to MLX-LM, so being asked again is noise.
-installAiStackUv() {
-    info "installAiStackUv — Python tool manager (needed by MLX-LM)"
+aistackInstallUv() {
+    info "aistackInstallUv — Python tool manager (needed by MLX-LM)"
     command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew."; return 1; }
     if command -v uv >/dev/null 2>&1; then
         ok "uv present: $(uv --version)"
@@ -470,8 +470,8 @@ installAiStackUv() {
 # Recommended first because it is the only engine here that reaches the Q5_K_M
 # and Q6_K quants — Ollama's registry carries q4_K_M and q8_0 and nothing
 # between. Already installed: offers an upgrade only when one actually exists.
-installAiStackLlamacppEngine() {
-    info "installAiStackLlamacppEngine — llama.cpp (GGUF engine)"
+aistackInstallLlamacppEngine() {
+    info "aistackInstallLlamacppEngine — llama.cpp (GGUF engine)"
     command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew."; return 1; }
     if llamacpp_installed; then
         ok "llama.cpp present: $(llama-cli --version 2>&1 | head -1)"
@@ -497,8 +497,8 @@ installAiStackLlamacppEngine() {
 # Usually the fastest inference on this chip and it publishes 6-bit builds.
 # Pulls uv in automatically when accepted; when already installed it checks PyPI
 # and asks about an update only if there is one.
-installAiStackMlxmlEngine() {
-    info "installAiStackMlxmlEngine — MLX-LM (Apple-native engine)"
+aistackInstallMlxmlEngine() {
+    info "aistackInstallMlxmlEngine — MLX-LM (Apple-native engine)"
     if mlxml_installed; then
         # installed: check PyPI automatically, ask only if an update exists
         local cur latest
@@ -521,7 +521,7 @@ installAiStackMlxmlEngine() {
         warn "Skipping MLX-LM."
         return 0
     fi
-    installAiStackUv required || { fail "MLX-LM needs uv — not installed."; return 1; }
+    aistackInstallUv required || { fail "MLX-LM needs uv — not installed."; return 1; }
     uv tool install mlx-lm && ok "MLX-LM installed." || { fail "mlx-lm install failed."; return 1; }
 }
 
@@ -553,8 +553,8 @@ PI_NPM_PKG="@earendil-works/pi-coding-agent"
 # Recommended because it works with every engine here — it drives any
 # OpenAI-compatible endpoint. Already installed: checks npm and offers an update
 # only when a newer version exists.
-installAiStackPiCodingAgent() {
-    info "installAiStackPiCodingAgent — Pi (minimal terminal coding harness)"
+aistackInstallPiCodingAgent() {
+    info "aistackInstallPiCodingAgent — Pi (minimal terminal coding harness)"
     if pi_installed; then
         local cur latest
         cur=$(pi --version 2>/dev/null | head -1 | tr -d 'v')
@@ -589,8 +589,8 @@ installAiStackPiCodingAgent() {
 # Coding-agent step, default no: install OpenCode via brew, npm as fallback.
 # Also engine-agnostic. Already installed: offers an upgrade only when brew
 # reports one.
-installAiStackOpenCodeCodingAgent() {
-    info "installAiStackOpenCodeCodingAgent — OpenCode (terminal agentic coder)"
+aistackInstallOpenCodeCodingAgent() {
+    info "aistackInstallOpenCodeCodingAgent — OpenCode (terminal agentic coder)"
     if opencode_installed; then
         ok "OpenCode present: $(opencode --version 2>/dev/null | head -1)"
         if brew list opencode >/dev/null 2>&1 && [ -n "$(brew outdated opencode 2>/dev/null)" ]; then
@@ -619,8 +619,8 @@ installAiStackOpenCodeCodingAgent() {
 # Default no because it speaks the Anthropic API, so of the engines here it works
 # with Ollama alone. Already installed: compares against the npm registry (which
 # works for the native build too) and asks only when an update exists.
-installAiStackClaudeCodingAgent() {
-    info "installAiStackClaudeCodingAgent — Claude Code CLI"
+aistackInstallClaudeCodingAgent() {
+    info "aistackInstallClaudeCodingAgent — Claude Code CLI"
     if claude_installed; then
         # rerun path: version check is AUTOMATIC (works for npm and native
         # installs alike); the update question appears only when needed,
@@ -1012,8 +1012,8 @@ aiStackModelMenu() {
 # Model step for llama.cpp: GGUF files into ~/Models/llama.cpp.
 # Skipped with a notice when llama.cpp is not installed, since another engine
 # may well be the one in use.
-installAiStackLlamacppModels() {
-    info "installAiStackLlamacppModels — GGUF models for llama.cpp"
+aistackInstallLlamacppModels() {
+    info "aistackInstallLlamacppModels — GGUF models for llama.cpp"
     if ! llamacpp_installed; then
         warn "llama.cpp is not installed — skipping its model list."
         return 0
@@ -1024,8 +1024,8 @@ installAiStackLlamacppModels() {
 
 # Model step for MLX-LM: HuggingFace repos into the HF cache.
 # Skipped with a notice when MLX-LM is not installed.
-installAiStackMlxmlModels() {
-    info "installAiStackMlxmlModels — MLX models for MLX-LM"
+aistackInstallMlxmlModels() {
+    info "aistackInstallMlxmlModels — MLX models for MLX-LM"
     if ! mlxml_installed; then
         warn "MLX-LM is not installed — skipping its model list."
         return 0
@@ -1037,8 +1037,8 @@ installAiStackMlxmlModels() {
 # Model step for Ollama: registry tags into ~/.ollama.
 # Skipped when Ollama is absent. Prunes the debris of earlier failed pulls first,
 # so the free-space numbers the menu shows are honest.
-installAiStackOllamaModels() {
-    info "installAiStackOllamaModels — models for Ollama"
+aistackInstallOllamaModels() {
+    info "aistackInstallOllamaModels — models for Ollama"
     if ! ollama_installed; then
         warn "Ollama is not installed — skipping its model list."
         return 0
@@ -1106,8 +1106,8 @@ _aiStackMonitorBrew() {
 # Monitoring step, default no: macmon — sudoless CPU/GPU/ANE and memory
 # monitoring for Apple Silicon. Useful beside a running model, but nothing in
 # the stack needs it, so it is offered rather than recommended.
-installAiStackMacmonMonitoring() {
-    info "installAiStackMacmonMonitoring — macmon (Apple Silicon performance monitor)"
+aistackInstallMacmonMonitoring() {
+    info "aistackInstallMacmonMonitoring — macmon (Apple Silicon performance monitor)"
     _aiStackMonitorBrew macmon "macmon" "n" \
         "Live CPU/GPU/ANE power and memory — run it beside a model to see what inference costs."
 }
@@ -1116,8 +1116,8 @@ installAiStackMacmonMonitoring() {
 # and compares local models over any OpenAI-compatible endpoint, with hardware
 # telemetry recorded alongside each run. The GUI counterpart to aiModelTest.sh,
 # so it works against every engine this stack installs.
-installAiStackAnubisMonitoring() {
-    info "installAiStackAnubisMonitoring — Anubis OSS (local LLM benchmarking)"
+aistackInstallAnubisMonitoring() {
+    info "aistackInstallAnubisMonitoring — Anubis OSS (local LLM benchmarking)"
     command -v brew >/dev/null 2>&1 || { fail "Prerequisite missing: Homebrew."; return 1; }
     if anubis_installed; then
         ok "Anubis OSS present: ${ANUBIS_APP}"
@@ -1146,8 +1146,8 @@ installAiStackAnubisMonitoring() {
 # every request and can export OpenTelemetry traces. Sits in front of the
 # engines, so you can see what an agent actually sent and what it cost.
 # Delivered through uv, like MLX-LM, rather than brew.
-installAiStackLitellmMonitoring() {
-    info "installAiStackLitellmMonitoring — LiteLLM proxy (request logging / OpenTelemetry)"
+aistackInstallLitellmMonitoring() {
+    info "aistackInstallLitellmMonitoring — LiteLLM proxy (request logging / OpenTelemetry)"
     if litellm_installed; then
         local cur latest
         cur=$(uv tool list 2>/dev/null | awk '/^litellm /{print $2}' | tr -d 'v')
@@ -1170,7 +1170,7 @@ installAiStackLitellmMonitoring() {
         warn "Skipping LiteLLM."
         return 0
     fi
-    installAiStackUv required || { fail "LiteLLM needs uv — not installed."; return 1; }
+    aistackInstallUv required || { fail "LiteLLM needs uv — not installed."; return 1; }
     uv tool install "litellm[proxy]" && ok "LiteLLM installed." || { fail "litellm install failed."; return 1; }
 }
 
@@ -1178,8 +1178,8 @@ installAiStackLitellmMonitoring() {
 # Final step: report what is installed — engines, agents, tooling, models.
 # Read-only. Benchmarking lives in aiModelTest.sh, and serving in
 # launchInference.sh; installing should not start or measure anything.
-installAiStackVerification() {
-    info "installAiStackVerification — status summary"
+aistackInstallVerification() {
+    info "aistackInstallVerification — status summary"
     echo
     echo "${BOLD}================= Install summary =================${RESET}"
     command -v brew >/dev/null 2>&1 && ok "Homebrew:  $(brew --version | head -1)" || fail "Homebrew:  missing"
@@ -1229,18 +1229,18 @@ installAiStackVerification() {
 # Wrapper: sanity, disk gate, Homebrew, engines, agents, models, verification.
 # Hard-fails on the foundations and stops entirely when no engine was installed.
 # Every step is independently callable, so this is only the convenient order.
-installAiStack() {
+aistackInstall() {
     echo "${BOLD}=============================================================${RESET}"
     echo "${BOLD} Local AI coding stack — installer (universal, re-runnable)${RESET}"
     echo "${BOLD}=============================================================${RESET}"
-    installAiStackSanity        || return 1
-    installAiStackDiskGate      || return 1
-    installAiStackHomebrew      || return 1
+    aistackInstallSanity        || return 1
+    aistackInstallDiskGate      || return 1
+    aistackInstallHomebrew      || return 1
 
     # --- engine layer: most-recommended first, each independently optional ---
-    installAiStackLlamacppEngine
-    installAiStackMlxmlEngine
-    installAiStackOllamaEngine
+    aistackInstallLlamacppEngine
+    aistackInstallMlxmlEngine
+    aistackInstallOllamaEngine
 
     # GATE: nothing below this line means anything without an engine
     local engines
@@ -1255,24 +1255,24 @@ installAiStack() {
 
     # --- coding agents: what you type into (engine-compatibility enforced
     #     later by launchInference.sh) ---
-    installAiStackPiCodingAgent
-    installAiStackOpenCodeCodingAgent
-    installAiStackClaudeCodingAgent
+    aistackInstallPiCodingAgent
+    aistackInstallOpenCodeCodingAgent
+    aistackInstallClaudeCodingAgent
 
     # --- model layer: same order as the engines, each skipped if absent ------
-    installAiStackLlamacppModels
-    installAiStackMlxmlModels
-    installAiStackOllamaModels
+    aistackInstallLlamacppModels
+    aistackInstallMlxmlModels
+    aistackInstallOllamaModels
 
     # --- monitoring: optional observability, asked before the verdict ---
-    installAiStackMacmonMonitoring
-    installAiStackAnubisMonitoring
-    installAiStackLitellmMonitoring
+    aistackInstallMacmonMonitoring
+    aistackInstallAnubisMonitoring
+    aistackInstallLitellmMonitoring
 
-    installAiStackVerification
+    aistackInstallVerification
 }
 
 # ---------- run pipeline when executed (not sourced) -------------------------
 if [ "${BASH_SOURCE[0]:-}" = "$0" ]; then
-    installAiStack
+    aistackInstall
 fi

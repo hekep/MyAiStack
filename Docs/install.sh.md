@@ -23,24 +23,24 @@ a Debian port will want different tools entirely.
 
 | Function | What | Default / re-run behavior |
 |---|---|---|
-| `installAiStackSanity` | Platform check + **host RAM detection**; sets `TOTAL_GB`/`GPU_GB` | Aborts under 16 GB RAM or non-Apple-Silicon |
-| `installAiStackDiskGate` | **HARD BLOCK** below 25 GB free. Shows shortfall, measured disk hogs, and offers to delete local Time Machine snapshots (which pin freed space). Loops *Enter = re-check / q = quit* | No bypass |
-| `installAiStackHomebrew` | Homebrew | Skips if present |
-| **`installAiStackLlamacppEngine`** | **llama.cpp** — `brew install llama.cpp` | **Default YES.** The only engine that reaches `Q5_K_M`/`Q6_K`. Present → checks `brew outdated`, offers upgrade only if one exists |
-| **`installAiStackMlxmlEngine`** | **MLX-LM** — `uv tool install mlx-lm` | **Default no.** Apple-native, fastest on this chip, publishes 6-bit builds. Pulls in `uv` automatically when accepted. Present → automatic PyPI check, asks only if a newer version exists |
-| **`installAiStackOllamaEngine`** | **Ollama** — brew formula | **Default no.** Managed daemon + Anthropic-compatible API (what Claude CLI talks to), narrowest quant ladder. A standalone `Ollama.app` gets the migrate-to-brew offer; brew-managed gets an upgrade offer only if one exists |
-| `installAiStackUv` | uv | Asked normally; `installAiStackUv required` installs without asking (used by MLX-LM) |
-| **`installAiStackPiCodingAgent`** | **Pi** — `npm i -g @earendil-works/pi-coding-agent` (+ `pi install npm:pi-local-models`) | **Default YES.** Works with every engine — it drives any OpenAI-compatible endpoint |
-| **`installAiStackOpenCodeCodingAgent`** | **OpenCode** — brew (npm fallback) | **Default no.** Also engine-agnostic |
-| **`installAiStackClaudeCodingAgent`** | **Claude Code** — npm / native installer | **Default no.** Anthropic API only, so of the engines here it works with **Ollama alone** |
-| **`installAiStackLlamacppModels`** | GGUF files → `~/Models/llama.cpp` | Skipped unless llama.cpp is installed |
-| **`installAiStackMlxmlModels`** | HF repos → HuggingFace cache | Skipped unless MLX-LM is installed |
-| **`installAiStackOllamaModels`** | registry tags → `~/.ollama` | Skipped unless Ollama is installed. Prunes failed-download leftovers first |
-| **`installAiStackMacmonMonitoring`** | **macmon** — brew | **Default no.** Sudoless CPU/GPU/ANE and memory monitoring for Apple Silicon — useful beside a running model, but nothing in the stack needs it |
-| **`installAiStackAnubisMonitoring`** | **Anubis OSS** — brew cask (`uncsoft/anubis`) | **Default no.** Native macOS app that benchmarks and compares local models over any OpenAI-compatible endpoint, with hardware telemetry per run — the GUI counterpart to `aiModelTest.sh`. macOS 15+. Detected by its app bundle, not `command -v`; the cask sets `auto_updates`, so the update check uses `--greedy` |
-| **`installAiStackLitellmMonitoring`** | **LiteLLM proxy** — uv | **Default no.** OpenAI-compatible proxy in front of the engines: logs every request and exports OpenTelemetry traces |
-| `installAiStackVerification` | Status summary: every engine, the frontend, and the models installed per engine | Pure read/report |
-| `installAiStack` | **Wrapper** — see order below | — |
+| `aistackInstallSanity` | Platform check + **host RAM detection**; sets `TOTAL_GB`/`GPU_GB` | Aborts under 16 GB RAM or non-Apple-Silicon |
+| `aistackInstallDiskGate` | **HARD BLOCK** below 25 GB free. Shows shortfall, measured disk hogs, and offers to delete local Time Machine snapshots (which pin freed space). Loops *Enter = re-check / q = quit* | No bypass |
+| `aistackInstallHomebrew` | Homebrew | Skips if present |
+| **`aistackInstallLlamacppEngine`** | **llama.cpp** — `brew install llama.cpp` | **Default YES.** The only engine that reaches `Q5_K_M`/`Q6_K`. Present → checks `brew outdated`, offers upgrade only if one exists |
+| **`aistackInstallMlxmlEngine`** | **MLX-LM** — `uv tool install mlx-lm` | **Default no.** Apple-native, fastest on this chip, publishes 6-bit builds. Pulls in `uv` automatically when accepted. Present → automatic PyPI check, asks only if a newer version exists |
+| **`aistackInstallOllamaEngine`** | **Ollama** — brew formula | **Default no.** Managed daemon + Anthropic-compatible API (what Claude CLI talks to), narrowest quant ladder. A standalone `Ollama.app` gets the migrate-to-brew offer; brew-managed gets an upgrade offer only if one exists |
+| `aistackInstallUv` | uv | Asked normally; `aistackInstallUv required` installs without asking (used by MLX-LM) |
+| **`aistackInstallPiCodingAgent`** | **Pi** — `npm i -g @earendil-works/pi-coding-agent` (+ `pi install npm:pi-local-models`) | **Default YES.** Works with every engine — it drives any OpenAI-compatible endpoint |
+| **`aistackInstallOpenCodeCodingAgent`** | **OpenCode** — brew (npm fallback) | **Default no.** Also engine-agnostic |
+| **`aistackInstallClaudeCodingAgent`** | **Claude Code** — npm / native installer | **Default no.** Anthropic API only, so of the engines here it works with **Ollama alone** |
+| **`aistackInstallLlamacppModels`** | GGUF files → `~/Models/llama.cpp` | Skipped unless llama.cpp is installed |
+| **`aistackInstallMlxmlModels`** | HF repos → HuggingFace cache | Skipped unless MLX-LM is installed |
+| **`aistackInstallOllamaModels`** | registry tags → `~/.ollama` | Skipped unless Ollama is installed. Prunes failed-download leftovers first |
+| **`aistackInstallMacmonMonitoring`** | **macmon** — brew | **Default no.** Sudoless CPU/GPU/ANE and memory monitoring for Apple Silicon — useful beside a running model, but nothing in the stack needs it |
+| **`aistackInstallAnubisMonitoring`** | **Anubis OSS** — brew cask (`uncsoft/anubis`) | **Default no.** Native macOS app that benchmarks and compares local models over any OpenAI-compatible endpoint, with hardware telemetry per run — the GUI counterpart to `aiModelTest.sh`. macOS 15+. Detected by its app bundle, not `command -v`; the cask sets `auto_updates`, so the update check uses `--greedy` |
+| **`aistackInstallLitellmMonitoring`** | **LiteLLM proxy** — uv | **Default no.** OpenAI-compatible proxy in front of the engines: logs every request and exports OpenTelemetry traces |
+| `aistackInstallVerification` | Status summary: every engine, the frontend, and the models installed per engine | Pure read/report |
+| `aistackInstall` | **Wrapper** — see order below | — |
 
 ## Order, and the engine gate
 
@@ -121,7 +121,7 @@ Per-engine download behavior:
 
 ```bash
 source install.sh                    # à la carte, e.g.:
-installAiStackLlamacppModels         # just the llama.cpp model menu
+aistackInstallLlamacppModels         # just the llama.cpp model menu
 ```
 
 Companions: [uninstall.sh.md](uninstall.sh.md) (reversal),

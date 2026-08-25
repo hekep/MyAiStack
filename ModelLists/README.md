@@ -22,7 +22,7 @@ repo whose name embeds the quantization.
 **largest tier ≤ host RAM** — a 96 GB host uses `64_GB_Ram.json`, a 47 GB host
 uses `32_GB_Ram.json`. A host below the smallest tier gets the smallest file.
 The engine folder comes from `MODEL_LIST_ENGINE`, which each model step sets
-for itself (`installAiStackLlamacppModels` → `Llama.cpp`, and so on).
+for itself (`aistackInstallLlamacppModels` → `Llama.cpp`, and so on).
 
 ## Schema
 

@@ -1,7 +1,7 @@
 # Llama.cpp model lists
 
 Catalogs for the **llama.cpp** engine (`brew install llama.cpp`), loaded by
-`installAiStackLlamacppModels` via `MODEL_LIST_ENGINE=Llama.cpp`.
+`aistackInstallLlamacppModels` via `MODEL_LIST_ENGINE=Llama.cpp`.
 
 Tiers provided: `24`, `32`, `48`, `64` GB. Hosts with more RAM load the 64 GB
 list until verified larger entries (70B+ GGUF) are added.

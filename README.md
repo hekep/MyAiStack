@@ -46,7 +46,7 @@ restart:
 
 ```bash
 aiStackHelp                     # list everything available
-installAiStackOllamaModels      # just the download menu
+aistackInstallOllamaModels      # just the download menu
 launchInferenceKillPrevious     # free the GPU without a full launch
 aiModelTest Ollama qwen3.6:35b-a3b
 ```
