@@ -18,17 +18,17 @@ different engines are directly comparable.
 
 | Function | Layer tested | Pass means |
 |---|---|---|
-| `aiModelTestEngineSelector` | — | Numeric menu of engines that actually **have downloaded models**; announced without a question when only one qualifies |
-| `aiModelTestModelSelector` | — | That engine's downloaded models (shares `aistackLaunchInferenceModelSelector`) |
-| `aiModelTestPromptSelector` | — | Asks what to send, defaulting to the weather prompt. Skipped when `PROMPT` is already set (e.g. by the sweep script) |
-| `aiModelTestEnsureServing` | — | Starts or re-points the engine at the chosen model: Ollama daemon, or `llama-server -m <gguf>`, or `mlx_lm.server --model <repo>`. A server already serving a *different* model is restarted |
-| `aiModelTestServer` | endpoint reachable | the engine answers |
-| `aiModelTestGenerate` | generation | prints answer, input/output tokens, seconds and **tokens/second** |
-| `aiModelTestAnthropic` | `/v1/messages` | Ollama only — **SKIP** (not FAIL) on llama.cpp and MLX-LM, with a note that Claude Code cannot use them but Pi and OpenCode can |
-| `aiModelTestToolCall` | agentic fitness | OpenAI `tools` format on every engine; two attempts, so PASS / **FLAKY** (retry only) / FAIL |
-| `aiModelTestContext` | served context ≥ 32k | Ollama via `/api/ps`, llama.cpp via `/props`; MLX-LM cannot report it (**WARN**) |
-| `aiModelTestRun` | tests 2–5 for one engine+model | reusable by the sweep |
-| `aiModelTest` | wrapper + verdict table | — |
+| `aistackModelTestEngineSelector` | — | Numeric menu of engines that actually **have downloaded models**; announced without a question when only one qualifies |
+| `aistackModelTestModelSelector` | — | That engine's downloaded models (shares `aistackLaunchInferenceModelSelector`) |
+| `aistackModelTestPromptSelector` | — | Asks what to send, defaulting to the weather prompt. Skipped when `PROMPT` is already set (e.g. by the sweep script) |
+| `aistackModelTestEnsureServing` | — | Starts or re-points the engine at the chosen model: Ollama daemon, or `llama-server -m <gguf>`, or `mlx_lm.server --model <repo>`. A server already serving a *different* model is restarted |
+| `aistackModelTestServer` | endpoint reachable | the engine answers |
+| `aistackModelTestGenerate` | generation | prints answer, input/output tokens, seconds and **tokens/second** |
+| `aistackModelTestAnthropic` | `/v1/messages` | Ollama only — **SKIP** (not FAIL) on llama.cpp and MLX-LM, with a note that Claude Code cannot use them but Pi and OpenCode can |
+| `aistackModelTestToolCall` | agentic fitness | OpenAI `tools` format on every engine; two attempts, so PASS / **FLAKY** (retry only) / FAIL |
+| `aistackModelTestContext` | served context ≥ 32k | Ollama via `/api/ps`, llama.cpp via `/props`; MLX-LM cannot report it (**WARN**) |
+| `aistackModelTestRun` | tests 2–5 for one engine+model | reusable by the sweep |
+| `aistackModelTest` | wrapper + verdict table | — |
 
 ## Measured baseline on this machine (M4 Pro 48 GB, qwen3.6:35b-a3b)
 

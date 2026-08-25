@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# testAllAiModels.sh — run the aiModelTest suite over EVERY engine and every
+# testAllAiModels.sh — run the aistackModelTest suite over EVERY engine and every
 #                      model that engine has downloaded, with one prompt, then
 #                      print a single comparison table.
 #
@@ -190,7 +190,7 @@ for engine in "${ENGINES[@]}"; do
         echo "${BOLD} [${IDX}/${TOTAL_MODELS}] ${engine} — ${model}${RESET}" >&2
         echo "${BOLD}=============================================================${RESET}" >&2
 
-        aiModelTestReset
+        aistackModelTestReset
         # always start from an empty machine — never stack two models
         freeAllEngines
         T0=$(date +%s)
@@ -199,9 +199,9 @@ for engine in "${ENGINES[@]}"; do
             warn "Raise it with: sudo sysctl iogpu.wired_limit_mb=... (see launchInference.sh)"
             R_generate=SKIP
             T1=$T0
-        elif aiModelTestEnsureServing "$engine" "$model" && aiModelTestServer "$engine"; then
+        elif aistackModelTestEnsureServing "$engine" "$model" && aistackModelTestServer "$engine"; then
             [ -n "${TEST_SERVER_PID:-}" ] && SWEEP_PIDS="${SWEEP_PIDS} ${TEST_SERVER_PID}"
-            aiModelTestRun "$engine" "$model"
+            aistackModelTestRun "$engine" "$model"
             T1=$(date +%s)
         else
             fail "Could not serve ${model} on ${engine} — recording as failed."

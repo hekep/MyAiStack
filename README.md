@@ -48,7 +48,7 @@ restart:
 aiStackHelp                     # list everything available
 aistackInstallOllamaModels      # just the download menu
 aistackLaunchInferenceKillPrevious     # free the GPU without a full launch
-aiModelTest Ollama qwen3.6:35b-a3b
+aistackModelTest Ollama qwen3.6:35b-a3b
 ```
 
 Each call runs in its own bash process, so the scripts' internal helpers never

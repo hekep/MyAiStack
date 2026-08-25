@@ -8,7 +8,7 @@
 #
 #   aistackInstallOllamaModels      # just the Ollama download menu
 #   aistackLaunchInferenceKillPrevious     # free the GPU without a full launch
-#   aiModelTest Ollama qwen3.6:35b-a3b
+#   aistackModelTest Ollama qwen3.6:35b-a3b
 #   uninstallAiStackPiCodingAgent
 #   aiStackHelp                     # list everything that is available
 #
@@ -116,7 +116,7 @@ if [ -n "$AI_STACK_OS_DIR" ]; then
     _aiStackDefine "${AI_STACK_OS_DIR}/install.sh"         aistackInstall
     _aiStackDefine "${AI_STACK_OS_DIR}/uninstall.sh"       uninstallAiStack
     _aiStackDefine "${AI_STACK_OS_DIR}/launchInference.sh" aistackLaunchInference
-    _aiStackDefine "${AI_STACK_OS_DIR}/aiModelTest.sh"     aiModelTest
+    _aiStackDefine "${AI_STACK_OS_DIR}/aiModelTest.sh"     aistackModelTest
 fi
 
 # Whole-script entry points, so the shell offers the same commands as the repo.
@@ -134,7 +134,7 @@ aiStackHelp() {
         return 1
     fi
     local group
-    for group in aistackInstall uninstallAiStack aistackLaunchInference aiModelTest; do
+    for group in aistackInstall uninstallAiStack aistackLaunchInference aistackModelTest; do
         echo
         echo "  ${group}*"
         # shellcheck disable=SC2086

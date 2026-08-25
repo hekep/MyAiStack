@@ -6,17 +6,17 @@
 # Asks which engine, then which of that engine's downloaded models, then tests
 # each layer independently so a failure names the broken part:
 #
-#   aiModelTestEngineSelector  — numeric menu of engines that have models
-#   aiModelTestModelSelector   — models downloaded for that engine
-#   aiModelTestPromptSelector  — what to send (skipped if PROMPT is set)
-#   aiModelTestEnsureServing   — start/point the engine at that model
-#   aiModelTestServer          — is the endpoint reachable?
-#   aiModelTestGenerate        — OpenAI /v1/chat/completions: tokens, time, tok/s
-#   aiModelTestAnthropic       — /v1/messages (Ollama only; SKIP elsewhere)
-#   aiModelTestToolCall        — agentic fitness: does it emit a tool call?
-#   aiModelTestContext         — is the served context >= 32k?
-#   aiModelTestRun             — tests 2-5 against the current engine+model
-#   aiModelTest                — wrapper
+#   aistackModelTestEngineSelector  — numeric menu of engines that have models
+#   aistackModelTestModelSelector   — models downloaded for that engine
+#   aistackModelTestPromptSelector  — what to send (skipped if PROMPT is set)
+#   aistackModelTestEnsureServing   — start/point the engine at that model
+#   aistackModelTestServer          — is the endpoint reachable?
+#   aistackModelTestGenerate        — OpenAI /v1/chat/completions: tokens, time, tok/s
+#   aistackModelTestAnthropic       — /v1/messages (Ollama only; SKIP elsewhere)
+#   aistackModelTestToolCall        — agentic fitness: does it emit a tool call?
+#   aistackModelTestContext         — is the served context >= 32k?
+#   aistackModelTestRun             — tests 2-5 against the current engine+model
+#   aistackModelTest                — wrapper
 #
 # Measurement is deliberately identical for every engine (same OpenAI endpoint,
 # same warmup, same wall-clock timing), so numbers are comparable across them.
@@ -44,7 +44,7 @@ TEST_ENDPOINT=""; TEST_SERVER_PID=""
 # Clear all per-model state before testing another model.
 # Resets the five R_* verdicts and the G_* generation metrics, so a sweep never
 # reports one model's numbers against another's name.
-aiModelTestReset() {
+aistackModelTestReset() {
     R_server=SKIP; R_generate=SKIP; R_anthropic=SKIP; R_toolcall=SKIP; R_context=SKIP
     G_TOKENS=0; G_TIME=0; G_TPS=0
 }
@@ -55,7 +55,7 @@ aiModelTestReset() {
 # Choose which engine to test; prints it on stdout.
 # Offers only engines that have downloaded models — there is nothing to measure
 # otherwise — and asks nothing when exactly one qualifies.
-aiModelTestEngineSelector() {
+aistackModelTestEngineSelector() {
     local engines=() e
     while IFS= read -r e; do [ -n "$e" ] && engines+=("$e"); done < <(enginesWithModels)
     if [ "${#engines[@]}" -eq 0 ]; then
@@ -88,7 +88,7 @@ aiModelTestEngineSelector() {
 # Decide what to send the model, storing it in PROMPT.
 # Asked only when PROMPT is not already set, so a wrapper such as
 # testAllAiModels.sh can ask once for a whole sweep and not be asked again.
-aiModelTestPromptSelector() {
+aistackModelTestPromptSelector() {
     if [ -n "$PROMPT" ]; then
         ok "Prompt: \"${PROMPT}\""
         return 0
@@ -102,11 +102,11 @@ aiModelTestPromptSelector() {
 # Choose which of the engine's models to test; prints the tag on stdout.
 # Args: <engine>. Shares launchInference.sh's selector so both tools show the
 # same menu rather than drifting apart.
-aiModelTestModelSelector() {
+aistackModelTestModelSelector() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "aiModelTestModelSelector <engine>" \
+        aiStackUsage "aistackModelTestModelSelector <engine>" \
             "$(_hintEngine)" \
-            "$(_hintExamples aiModelTestModelSelector engine)"
+            "$(_hintExamples aistackModelTestModelSelector engine)"
         return 2
     fi
     aistackLaunchInferenceModelSelector "$1"
@@ -117,13 +117,13 @@ aiModelTestModelSelector() {
 # Args: <engine> <model>. Ollama loads on demand; llama.cpp and MLX bind one
 # model at server start, so a server on a different model is restarted.
 # Sets TEST_ENDPOINT, and TEST_SERVER_PID when this script started the server.
-aiModelTestEnsureServing() {
+aistackModelTestEnsureServing() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "aiModelTestEnsureServing <engine> <model>" \
+        aiStackUsage "aistackModelTestEnsureServing <engine> <model>" \
             "$(_hintEngine)" \
             "$(_hintModel)" \
             "effect  : starts or re-points the engine; sets TEST_ENDPOINT" \
-            "$(_hintExamples aiModelTestEnsureServing engine-model)"
+            "$(_hintExamples aistackModelTestEnsureServing engine-model)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" host="127.0.0.1" port t=0
@@ -191,7 +191,7 @@ aiModelTestEnsureServing() {
 # Stop the server only if this script was the one that started it.
 # Leaves a server you were already running alone — the test should not tear
 # down a session it did not create.
-aiModelTestStopServer() {   # only stops what this script started
+aistackModelTestStopServer() {   # only stops what this script started
     [ -n "${TEST_SERVER_PID:-}" ] || return 0
     kill "$TEST_SERVER_PID" 2>/dev/null
     TEST_SERVER_PID=""
@@ -200,7 +200,7 @@ aiModelTestStopServer() {   # only stops what this script started
 # Ask the endpoint which model id it advertises.
 # Accepts both the OpenAI shape ({data:[{id}]}) and llama.cpp's ({models:
 # [{name}]}), because requests must name the model the server expects.
-aiModelTestServedId() {
+aistackModelTestServedId() {
     curl -sf --max-time 8 "${TEST_ENDPOINT}/v1/models" 2>/dev/null | python3 -c '
 import json,sys
 try:
@@ -214,12 +214,12 @@ except Exception: print("")' 2>/dev/null
 # Test 1: is the engine reachable and ready?
 # Args: <engine>. Sets R_server. A failure here stops the suite, since every
 # later test would just repeat the same connection error.
-aiModelTestServer() {
+aistackModelTestServer() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "aiModelTestServer <engine>" \
+        aiStackUsage "aistackModelTestServer <engine>" \
             "$(_hintEngine)" \
-            "note    : call aiModelTestEnsureServing first — it sets TEST_ENDPOINT" \
-            "$(_hintExamples aiModelTestServer engine)"
+            "note    : call aistackModelTestEnsureServing first — it sets TEST_ENDPOINT" \
+            "$(_hintExamples aistackModelTestServer engine)"
         return 2
     fi
     local engine="${1:-}"
@@ -239,17 +239,17 @@ aiModelTestServer() {
 # Args: <engine> <model>. Uses the OpenAI endpoint on every engine, with a
 # warmup request first so model-load time is not counted as generation time —
 # that is what makes numbers from different engines comparable.
-aiModelTestGenerate() {
+aistackModelTestGenerate() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "aiModelTestGenerate <engine> <model>" \
+        aiStackUsage "aistackModelTestGenerate <engine> <model>" \
             "$(_hintEngine)" \
             "$(_hintModel)" \
             "prompt  : override with PROMPT=... ; sets G_TOKENS/G_TIME/G_TPS" \
-            "$(_hintExamples aiModelTestGenerate engine-model)"
+            "$(_hintExamples aistackModelTestGenerate engine-model)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" served payload resp t0 t1
-    served=$(aiModelTestServedId); [ -z "$served" ] && served="$model"
+    served=$(aistackModelTestServedId); [ -z "$served" ] && served="$model"
     info "Test 2 — generation with PROMPT: \"${PROMPT}\""
 
     local warm
@@ -307,13 +307,13 @@ PYEOF
 # Args: <engine> <model>. SKIP rather than FAIL on llama.cpp and MLX-LM: they
 # serve OpenAI-compatible APIs by design, so this is a capability note, not a
 # defect. Uses a generous token budget — thinking models reason before replying.
-aiModelTestAnthropic() {
+aistackModelTestAnthropic() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "aiModelTestAnthropic <engine> <model>" \
+        aiStackUsage "aistackModelTestAnthropic <engine> <model>" \
             "$(_hintEngine)" \
             "$(_hintModel)" \
             "note    : only meaningful for Ollama; SKIPs on the others" \
-            "$(_hintExamples aiModelTestAnthropic engine-model Claude)"
+            "$(_hintExamples aistackModelTestAnthropic engine-model Claude)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" resp
@@ -359,17 +359,17 @@ PYEOF
 # Args: <engine> <model>. The agentic make-or-break, so it is tried twice:
 # PASS first time, FLAKY only on the retry, FAIL after two misses. Uses a fixed
 # weather prompt so an unrelated PROMPT cannot make a correct answer look wrong.
-aiModelTestToolCall() {
+aistackModelTestToolCall() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "aiModelTestToolCall <engine> <model>" \
+        aiStackUsage "aistackModelTestToolCall <engine> <model>" \
             "$(_hintEngine)" \
             "$(_hintModel)" \
             "result  : sets R_toolcall to PASS / FLAKY / FAIL" \
-            "$(_hintExamples aiModelTestToolCall engine-model)"
+            "$(_hintExamples aistackModelTestToolCall engine-model)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" served payload resp attempt
-    served=$(aiModelTestServedId); [ -z "$served" ] && served="$model"
+    served=$(aistackModelTestServedId); [ -z "$served" ] && served="$model"
     info "Test 4 — tool calling: get_weather + fixed weather prompt"
     payload=$(python3 - "$served" <<PYEOF
 import json, sys
@@ -390,7 +390,7 @@ PYEOF
                -H "content-type: application/json" -H "authorization: Bearer local" \
                -d "$payload" 2>/dev/null)
         [ -z "$resp" ] && { fail "Tool-call request failed."; return 1; }
-        if aiModelTestToolCallParse "$resp"; then
+        if aistackModelTestToolCallParse "$resp"; then
             [ "$attempt" = "2" ] && R_toolcall=FLAKY || R_toolcall=PASS
             break
         fi
@@ -405,10 +405,10 @@ PYEOF
 # Parse one chat-completions response and judge the tool call.
 # Args: <response json>. Returns 0 for a get_weather call carrying the required
 # argument, 1 when the model answered in prose instead (and prints what it said).
-aiModelTestToolCallParse() {
+aistackModelTestToolCallParse() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "aiModelTestToolCallParse <response-json>" \
-            "internal: judges one /v1/chat/completions reply for a tool call" 'example : aiModelTestToolCallParse "$(cat reply.json)"  # pass the JSON as one argument'
+        aiStackUsage "aistackModelTestToolCallParse <response-json>" \
+            "internal: judges one /v1/chat/completions reply for a tool call" 'example : aistackModelTestToolCallParse "$(cat reply.json)"  # pass the JSON as one argument'
         return 2
     fi
     python3 - "$1" <<'PYEOF'
@@ -440,13 +440,13 @@ PYEOF
 # Args: <engine> <model>. Ollama reports it via /api/ps, llama.cpp via /props;
 # MLX-LM cannot report it at all, so that is WARN rather than a verdict.
 # Under 32k an agent's system prompt alone overflows — the classic silent fault.
-aiModelTestContext() {
+aistackModelTestContext() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "aiModelTestContext <engine> <model>" \
+        aiStackUsage "aistackModelTestContext <engine> <model>" \
             "$(_hintEngine)" \
             "$(_hintModel)" \
             "result  : sets R_context; MLX-LM cannot report it (WARN)" \
-            "$(_hintExamples aiModelTestContext engine-model)"
+            "$(_hintExamples aistackModelTestContext engine-model)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" ctx=0 host
@@ -493,20 +493,20 @@ except Exception: print(0)' 2>/dev/null)
 # Run tests 2-5 against one engine and model.
 # Args: <engine> <model>. Split out from the wrapper so a sweep can reuse the
 # suite without re-asking any of the selection questions.
-aiModelTestRun() {
+aistackModelTestRun() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "aiModelTestRun <engine> <model>" \
+        aiStackUsage "aistackModelTestRun <engine> <model>" \
             "$(_hintEngine)" \
             "$(_hintModel)" \
-            "runs    : tests 2-5; serve the model first (aiModelTestEnsureServing)" \
-            "$(_hintExamples aiModelTestRun engine-model)"
+            "runs    : tests 2-5; serve the model first (aistackModelTestEnsureServing)" \
+            "$(_hintExamples aistackModelTestRun engine-model)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}"
-    aiModelTestGenerate  "$engine" "$model"
-    aiModelTestAnthropic "$engine" "$model"
-    aiModelTestToolCall  "$engine" "$model"
-    aiModelTestContext   "$engine" "$model"
+    aistackModelTestGenerate  "$engine" "$model"
+    aistackModelTestAnthropic "$engine" "$model"
+    aistackModelTestToolCall  "$engine" "$model"
+    aistackModelTestContext   "$engine" "$model"
 }
 
 # ---------- wrapper -----------------------------------------------------------
@@ -514,19 +514,19 @@ aiModelTestRun() {
 # Args: [engine] [model] — either may be given to skip its menu.
 # Ends with a verdict table and a plain reading of it: fix FAIL lines before
 # judging the model, because most of them are configuration, not capability.
-aiModelTest() {
+aistackModelTest() {
     command -v python3 >/dev/null 2>&1 || { fail "python3 is required."; return 1; }
     local engine="${1:-}" model="${2:-}" T0 T1
-    [ -z "$engine" ] && { engine=$(aiModelTestEngineSelector) || return 1; }
-    [ -z "$model" ]  && { model=$(aiModelTestModelSelector "$engine") || return 1; }
-    aiModelTestPromptSelector
+    [ -z "$engine" ] && { engine=$(aistackModelTestEngineSelector) || return 1; }
+    [ -z "$model" ]  && { model=$(aistackModelTestModelSelector "$engine") || return 1; }
+    aistackModelTestPromptSelector
     info "Testing ${BOLD}${model}${RESET} on ${BOLD}${engine}${RESET}"
 
-    aiModelTestEnsureServing "$engine" "$model" || return 1
-    aiModelTestServer "$engine" || return 1
+    aistackModelTestEnsureServing "$engine" "$model" || return 1
+    aistackModelTestServer "$engine" || return 1
 
     T0=$(date +%s)
-    aiModelTestRun "$engine" "$model"
+    aistackModelTestRun "$engine" "$model"
     T1=$(date +%s)
 
     echo >&2
@@ -558,5 +558,5 @@ aiModelTest() {
 }
 
 if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
-    aiModelTest "$@"
+    aistackModelTest "$@"
 fi

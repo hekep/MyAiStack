@@ -16,14 +16,14 @@ After a shell restart:
 aiStackHelp                     # list everything available
 aistackInstallOllamaModels      # just the Ollama download menu
 aistackLaunchInferenceKillPrevious     # free the GPU without a full launch
-aiModelTest Ollama qwen3.6:35b-a3b
+aistackModelTest Ollama qwen3.6:35b-a3b
 uninstallAiStackPiCodingAgent
 testAllAiModels
 aistackNoRole Docker
 ```
 
 55 functions at present: `aistackInstall*`, `uninstallAiStack*`,
-`aistackLaunchInference*`, `aiModelTest*`, plus the whole-script entry points.
+`aistackLaunchInference*`, `aistackModelTest*`, plus the whole-script entry points.
 
 ## How it works
 

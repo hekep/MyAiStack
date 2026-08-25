@@ -2,7 +2,7 @@
 
 ## What it does
 
-Runs the aiModelTest suite over **every engine and every model that engine has
+Runs the aistackModelTest suite over **every engine and every model that engine has
 downloaded**, using one prompt for all of them, and ends with a single
 comparison table.
 
@@ -19,9 +19,9 @@ comparison table.
    and cannot run alongside your session.
 3. Enumerates engines that have models, and sweeps
    `for each engine → for each of its models`.
-4. Per model: `aiModelTestEnsureServing` (starts the Ollama daemon, or
-   `llama-server` / `mlx_lm.server` bound to that model) → `aiModelTestServer`
-   → `aiModelTestRun`.
+4. Per model: `aistackModelTestEnsureServing` (starts the Ollama daemon, or
+   `llama-server` / `mlx_lm.server` bound to that model) → `aistackModelTestServer`
+   → `aistackModelTestRun`.
 5. **Frees the hardware before *and* after every model** — `freeAllEngines`
    unloads all Ollama models, kills our llama-server and any mlx server, then
    **waits (up to 40 s, escalating to SIGKILL) until the processes are really
