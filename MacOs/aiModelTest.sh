@@ -201,6 +201,7 @@ aistackModelTestStopServer() {   # only stops what this script started
 # Accepts both the OpenAI shape ({data:[{id}]}) and llama.cpp's ({models:
 # [{name}]}), because requests must name the model the server expects.
 aistackModelTestServedId() {
+    [ -n "${1:-}" ] && _testEndpointFor "$1"
     curl -sf --max-time 8 "${TEST_ENDPOINT}/v1/models" 2>/dev/null | python3 -c '
 import json,sys
 try:
@@ -208,6 +209,16 @@ try:
     xs=d.get("data") or d.get("models") or []
     print((xs[0].get("id") or xs[0].get("name") or "") if xs else "")
 except Exception: print("")' 2>/dev/null
+}
+
+# Make sure TEST_ENDPOINT points somewhere, so a test called on its own works.
+# Args: <engine>. aistackModelTestEnsureServing sets TEST_ENDPOINT, but every
+# test below can be called directly — without this they would query "" and
+# report "no server" while one is running.
+_testEndpointFor() {
+    local engine="${1:?}"
+    [ -n "${TEST_ENDPOINT:-}" ] && return 0
+    TEST_ENDPOINT="http://127.0.0.1:$(engine_port "$engine")"
 }
 
 # ---------- 1. server reachable ----------------------------------------------
@@ -223,6 +234,7 @@ aistackModelTestServer() {
         return 2
     fi
     local engine="${1:-}"
+    _testEndpointFor "$engine"
     info "Test 1 — ${engine} reachable at ${TEST_ENDPOINT}"
     if engine_up "$engine" "$(echo "$TEST_ENDPOINT" | sed 's|http://||; s|:.*||')"; then
         ok "${engine} is serving."
@@ -249,6 +261,7 @@ aistackModelTestGenerate() {
         return 2
     fi
     local engine="${1:-}" model="${2:-}" served payload resp t0 t1
+    _testEndpointFor "$engine"
     served=$(aistackModelTestServedId); [ -z "$served" ] && served="$model"
     info "Test 2 — generation with PROMPT: \"${PROMPT}\""
 
@@ -317,6 +330,7 @@ aistackModelTestAnthropic() {
         return 2
     fi
     local engine="${1:-}" model="${2:-}" resp
+    _testEndpointFor "$engine"
     if [ "$engine" != "Ollama" ]; then
         info "Test 3 — Anthropic endpoint: not applicable to ${engine} (OpenAI-compatible only)"
         warn "Claude Code cannot use ${engine}; Pi and OpenCode can."
@@ -369,6 +383,7 @@ aistackModelTestToolCall() {
         return 2
     fi
     local engine="${1:-}" model="${2:-}" served payload resp attempt
+    _testEndpointFor "$engine"
     served=$(aistackModelTestServedId); [ -z "$served" ] && served="$model"
     info "Test 4 — tool calling: get_weather + fixed weather prompt"
     payload=$(python3 - "$served" <<PYEOF
@@ -450,6 +465,7 @@ aistackModelTestContext() {
         return 2
     fi
     local engine="${1:-}" model="${2:-}" ctx=0 host
+    _testEndpointFor "$engine"
     host=$(echo "$TEST_ENDPOINT" | sed 's|http://||; s|:.*||')
     info "Test 5 — served context window (agents want >= 32k)"
     case "$engine" in
