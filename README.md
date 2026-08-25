@@ -45,7 +45,7 @@ most day-to-day work is a single one. After `./installAliases.sh` and a shell
 restart:
 
 ```bash
-aiStackHelp                     # list everything available
+aistackHelp                     # list everything available
 aistackInstallOllamaModels      # just the download menu
 aistackLaunchInferenceKillPrevious     # free the GPU without a full launch
 aistackModelTest Ollama qwen3.6:35b-a3b

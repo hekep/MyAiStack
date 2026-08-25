@@ -3,27 +3,27 @@
 # uninstall.sh — Local AI coding stack remover (function-based)
 #
 # Mirror image of install.sh: every layer is an independent function, prefixed
-# uninstallAiStack*, and they run from the MOST DEPENDENT layer down to the
+# aistackUninstall*, and they run from the MOST DEPENDENT layer down to the
 # foundations — the reverse of the installer's order. Steps carrying "Ollama"
 # in the name are engine-specific; the others apply to the stack as a whole.
 #
-#   uninstallAiStackOllamaModels         the models   <- GATE for everything below
+#   aistackUninstallOllamaModels         the models   <- GATE for everything below
 #   --- monitoring: observational, nothing depends on it (macOS-specific) ---
-#   uninstallAiStackMacmonMonitoring     macmon
-#   uninstallAiStackAnubisMonitoring     Anubis OSS
-#   uninstallAiStackLitellmMonitoring    LiteLLM proxy
+#   aistackUninstallMacmonMonitoring     macmon
+#   aistackUninstallAnubisMonitoring     Anubis OSS
+#   aistackUninstallLitellmMonitoring    LiteLLM proxy
 #   --- coding agents: what you type into, they sit above the engines ---
-#   uninstallAiStackClaudeCodingAgent    Claude Code CLI
-#   uninstallAiStackOpenCodeCodingAgent  OpenCode
-#   uninstallAiStackPiCodingAgent        Pi
+#   aistackUninstallClaudeCodingAgent    Claude Code CLI
+#   aistackUninstallOpenCodeCodingAgent  OpenCode
+#   aistackUninstallPiCodingAgent        Pi
 #   --- engines and foundations ---
-#   uninstallAiStackMlx                  mlx-lm / MLX-LM engine (+ HF cache)
-#   uninstallAiStackOllamaEngine         Ollama itself (service, formula, .app)
-#   uninstallAiStackOllamaData           ~/.ollama — model blobs + registry keys
-#   uninstallAiStackUv                   uv (foundation of mlx-lm)
-#   uninstallAiStackHomebrew             reports only — never removed
-#   uninstallAiStackStatus               what is left standing
-#   uninstallAiStack                     wrapper — runs all of the above in order
+#   aistackUninstallMlx                  mlx-lm / MLX-LM engine (+ HF cache)
+#   aistackUninstallOllamaEngine         Ollama itself (service, formula, .app)
+#   aistackUninstallOllamaData           ~/.ollama — model blobs + registry keys
+#   aistackUninstallUv                   uv (foundation of mlx-lm)
+#   aistackUninstallHomebrew             reports only — never removed
+#   aistackUninstallStatus               what is left standing
+#   aistackUninstall                     wrapper — runs all of the above in order
 #
 # THE GATE: while any Ollama model is still installed, Ollama and everything
 # under it must stay, so the wrapper stops there. Remove every model to reach
@@ -128,8 +128,8 @@ ollama_model_count() { ollama list 2>/dev/null | awk 'NR>1' | grep -c . ; }
 # menu re-renders — and starts the daemon temporarily if it is not running.
 # Returns 0 only when NO models remain; 1 (models left, or N) stops the wizard,
 # because nothing a model depends on may be removed while it exists.
-uninstallAiStackOllamaModels() {
-    info "uninstallAiStackOllamaModels — the Ollama models (gate for every layer below)"
+aistackUninstallOllamaModels() {
+    info "aistackUninstallOllamaModels — the Ollama models (gate for every layer below)"
     if ! command -v ollama >/dev/null 2>&1; then
         ok "Ollama is not installed — no models to remove."
         return 0
@@ -144,7 +144,7 @@ uninstallAiStackOllamaModels() {
     fi
     if ! ollama_server_up; then
         warn "Could not reach the Ollama server — cannot enumerate models."
-        warn "Models can still be wiped wholesale via uninstallAiStackOllamaData (~/.ollama)."
+        warn "Models can still be wiped wholesale via aistackUninstallOllamaData (~/.ollama)."
         [ "$started" -eq 1 ] && pkill -f "ollama serve" 2>/dev/null
         return 1
     fi
@@ -194,8 +194,8 @@ uninstallAiStackOllamaModels() {
 # Remove the MLX-LM engine (the mlx-lm uv tool).
 # Then offers the HuggingFace model cache separately and defaults to keeping it:
 # it is pure re-downloadable cache, but often the largest item on the disk.
-uninstallAiStackMlx() {
-    info "uninstallAiStackMlx — mlx-lm and its model cache"
+aistackUninstallMlx() {
+    info "aistackUninstallMlx — mlx-lm and its model cache"
     if ! command -v uv >/dev/null 2>&1 || ! uv tool list 2>/dev/null | grep -q '^mlx-lm'; then
         ok "mlx-lm not installed — nothing to do."
         return 0
@@ -229,8 +229,8 @@ uninstallAiStackMlx() {
 # Remove macmon (Apple Silicon performance monitor).
 # Default No: it is small, useful beside any workload, and unrelated to whether
 # you keep the models — so removing it is rarely what you actually want.
-uninstallAiStackMacmonMonitoring() {
-    info "uninstallAiStackMacmonMonitoring — macmon"
+aistackUninstallMacmonMonitoring() {
+    info "aistackUninstallMacmonMonitoring — macmon"
     if ! command -v macmon >/dev/null 2>&1; then
         ok "macmon not installed — nothing to do."
         return 0
@@ -247,8 +247,8 @@ uninstallAiStackMacmonMonitoring() {
 # Default No. Offers brew's --zap afterwards, which also clears the app's
 # support files and — importantly — your saved benchmark history, so that is a
 # separate question rather than part of the uninstall.
-uninstallAiStackAnubisMonitoring() {
-    info "uninstallAiStackAnubisMonitoring — Anubis OSS"
+aistackUninstallAnubisMonitoring() {
+    info "aistackUninstallAnubisMonitoring — Anubis OSS"
     local app="/Applications/Anubis OSS.app"
     if [ ! -d "$app" ] && ! brew list --cask anubis-oss >/dev/null 2>&1; then
         ok "Anubis OSS not installed — nothing to do."
@@ -280,8 +280,8 @@ uninstallAiStackAnubisMonitoring() {
 # Remove the LiteLLM proxy (a uv tool).
 # Default No. Offers its config directory separately, since ~/.litellm can hold
 # provider keys you would not want to re-enter.
-uninstallAiStackLitellmMonitoring() {
-    info "uninstallAiStackLitellmMonitoring — LiteLLM proxy"
+aistackUninstallLitellmMonitoring() {
+    info "aistackUninstallLitellmMonitoring — LiteLLM proxy"
     if ! command -v uv >/dev/null 2>&1 || ! uv tool list 2>/dev/null | grep -q '^litellm'; then
         ok "LiteLLM not installed — nothing to do."
         return 0
@@ -305,8 +305,8 @@ uninstallAiStackLitellmMonitoring() {
 # Remove the Pi coding agent (npm package, either publisher scope).
 # Defaults to No. Offers ~/.pi — config, plugins, session transcripts — as a
 # separate question, since that is your data rather than the program.
-uninstallAiStackPiCodingAgent() {
-    info "uninstallAiStackPiCodingAgent — Pi coding agent"
+aistackUninstallPiCodingAgent() {
+    info "aistackUninstallPiCodingAgent — Pi coding agent"
     if ! command -v pi >/dev/null 2>&1; then
         ok "Pi not installed — nothing to do."
         return 0
@@ -330,8 +330,8 @@ uninstallAiStackPiCodingAgent() {
 # Remove OpenCode, using whichever channel installed it (brew, else npm).
 # Defaults to No, and offers ~/.config/opencode separately so provider settings
 # survive a reinstall unless you say otherwise.
-uninstallAiStackOpenCodeCodingAgent() {
-    info "uninstallAiStackOpenCodeCodingAgent — OpenCode"
+aistackUninstallOpenCodeCodingAgent() {
+    info "aistackUninstallOpenCodeCodingAgent — OpenCode"
     if ! command -v opencode >/dev/null 2>&1; then
         ok "OpenCode not installed — nothing to do."
         return 0
@@ -356,8 +356,8 @@ uninstallAiStackOpenCodeCodingAgent() {
 # Remove the Claude Code CLI (npm package or native installer layout).
 # Defaults to No — it may be the very session you are typing in.
 # ~/.claude (sessions, settings, memory) is never touched by this script.
-uninstallAiStackClaudeCodingAgent() {
-    info "uninstallAiStackClaudeCodingAgent — Claude Code CLI"
+aistackUninstallClaudeCodingAgent() {
+    info "aistackUninstallClaudeCodingAgent — Claude Code CLI"
     if ! command -v claude >/dev/null 2>&1; then
         ok "claude CLI not installed — nothing to do."
         return 0
@@ -393,8 +393,8 @@ uninstallAiStackClaudeCodingAgent() {
 # Refuses while any model is installed, so the rule holds even when called
 # directly. Stops every way it can run (brew service, LAN LaunchAgent, app,
 # bare serve), then removes the formula, the .app and its stray symlink.
-uninstallAiStackOllamaEngine() {
-    info "uninstallAiStackOllamaEngine — the Ollama runtime"
+aistackUninstallOllamaEngine() {
+    info "aistackUninstallOllamaEngine — the Ollama runtime"
     local present=0
     brew list ollama >/dev/null 2>&1 && present=1
     [ -d /Applications/Ollama.app ]  && present=1
@@ -409,7 +409,7 @@ uninstallAiStackOllamaEngine() {
     n=$(ollama_model_count 2>/dev/null || echo 0)
     if [ "${n:-0}" -gt 0 ]; then
         fail "${n} model(s) still installed — refusing to remove Ollama."
-        fail "Run uninstallAiStackOllamaModels first."
+        fail "Run aistackUninstallOllamaModels first."
         return 1
     fi
 
@@ -451,8 +451,8 @@ uninstallAiStackOllamaEngine() {
 # The only unrecoverable step here, so it shows the size, asks twice, and both
 # questions default to No. Kept separate from the engine on purpose: losing the
 # program costs minutes, losing the blobs costs hours of downloading.
-uninstallAiStackOllamaData() {
-    info "uninstallAiStackOllamaData — ~/.ollama (model blobs + registry keypair)"
+aistackUninstallOllamaData() {
+    info "aistackUninstallOllamaData — ~/.ollama (model blobs + registry keypair)"
     if [ ! -d "$HOME/.ollama" ]; then
         ok "~/.ollama does not exist — nothing to do."
         return 0
@@ -479,8 +479,8 @@ uninstallAiStackOllamaData() {
 # Remove uv, the foundation MLX-LM was installed through.
 # Lists any other tools uv still manages first — removing it would leave them
 # unmanaged — and defaults to No for that reason.
-uninstallAiStackUv() {
-    info "uninstallAiStackUv — uv"
+aistackUninstallUv() {
+    info "aistackUninstallUv — uv"
     if ! command -v uv >/dev/null 2>&1 || ! brew list uv >/dev/null 2>&1; then
         ok "uv not brew-installed — nothing to do."
         return 0
@@ -502,8 +502,8 @@ uninstallAiStackUv() {
 # Report Homebrew and deliberately leave it alone.
 # It manages software far beyond this stack, so removing it is never offered;
 # the upstream uninstall instructions are printed instead.
-uninstallAiStackHomebrew() {
-    info "uninstallAiStackHomebrew — Homebrew"
+aistackUninstallHomebrew() {
+    info "aistackUninstallHomebrew — Homebrew"
     if ! command -v brew >/dev/null 2>&1; then
         ok "Homebrew not installed."
         return 0
@@ -516,7 +516,7 @@ uninstallAiStackHomebrew() {
 # Print what is still standing: engines, agents, models, uv, brew, free disk.
 # Also printed when the model gate stops the run, so a cancelled uninstall still
 # ends with an accurate picture.
-uninstallAiStackStatus() {
+aistackUninstallStatus() {
     echo
     echo "${BOLD}================= What is left =================${RESET}"
     command -v ollama >/dev/null 2>&1 && warn "Ollama:  still installed ($(ollama --version 2>/dev/null))" \
@@ -540,42 +540,42 @@ uninstallAiStackStatus() {
 # Wrapper: run every layer from most-dependent down to the foundations.
 # Models first (the gate), then coding agents, then engines and their data.
 # Stops after the gate when models remain, keeping everything they need.
-uninstallAiStack() {
+aistackUninstall() {
     echo "${BOLD}=============================================================${RESET}"
     echo "${BOLD} Local AI coding stack — uninstaller${RESET}"
     echo "${BOLD} Order: most dependent layer first -> foundations last${RESET}"
     echo "${BOLD}=============================================================${RESET}"
 
     # THE GATE — while models exist, nothing below them may be removed.
-    if ! uninstallAiStackOllamaModels; then
+    if ! aistackUninstallOllamaModels; then
         echo
         warn "${BOLD}Uninstallation stopped: Ollama models are still installed.${RESET}"
         warn "Ollama, mlx-lm, the Claude CLI and uv are all kept — models depend on them."
         warn "Remove every model to continue, or run a single layer function directly:"
-        warn "  source uninstall.sh && uninstallAiStackMlx"
-        uninstallAiStackStatus
+        warn "  source uninstall.sh && aistackUninstallMlx"
+        aistackUninstallStatus
         exit 0
     fi
 
     # monitoring first: nothing depends on it
-    uninstallAiStackMacmonMonitoring
-    uninstallAiStackAnubisMonitoring
-    uninstallAiStackLitellmMonitoring
+    aistackUninstallMacmonMonitoring
+    aistackUninstallAnubisMonitoring
+    aistackUninstallLitellmMonitoring
 
     # then the coding agents — they sit above the engines
-    uninstallAiStackClaudeCodingAgent
-    uninstallAiStackOpenCodeCodingAgent
-    uninstallAiStackPiCodingAgent
+    aistackUninstallClaudeCodingAgent
+    aistackUninstallOpenCodeCodingAgent
+    aistackUninstallPiCodingAgent
 
-    uninstallAiStackMlx
-    uninstallAiStackOllamaEngine
-    uninstallAiStackOllamaData
-    uninstallAiStackUv
-    uninstallAiStackHomebrew
-    uninstallAiStackStatus
+    aistackUninstallMlx
+    aistackUninstallOllamaEngine
+    aistackUninstallOllamaData
+    aistackUninstallUv
+    aistackUninstallHomebrew
+    aistackUninstallStatus
 }
 
 # ---------- run pipeline when executed (not sourced) -------------------------
 if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
-    uninstallAiStack
+    aistackUninstall
 fi

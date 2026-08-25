@@ -9,8 +9,8 @@
 #   aistackInstallOllamaModels      # just the Ollama download menu
 #   aistackLaunchInferenceKillPrevious     # free the GPU without a full launch
 #   aistackModelTest Ollama qwen3.6:35b-a3b
-#   uninstallAiStackPiCodingAgent
-#   aiStackHelp                     # list everything that is available
+#   aistackUninstallPiCodingAgent
+#   aistackHelp                     # list everything that is available
 #
 # Two things it deliberately does NOT do:
 #
@@ -114,37 +114,39 @@ _aiStackDefine() {
 AI_STACK_FUNCS=""
 if [ -n "$AI_STACK_OS_DIR" ]; then
     _aiStackDefine "${AI_STACK_OS_DIR}/install.sh"         aistackInstall
-    _aiStackDefine "${AI_STACK_OS_DIR}/uninstall.sh"       uninstallAiStack
+    _aiStackDefine "${AI_STACK_OS_DIR}/uninstall.sh"       aistackUninstall
     _aiStackDefine "${AI_STACK_OS_DIR}/launchInference.sh" aistackLaunchInference
     _aiStackDefine "${AI_STACK_OS_DIR}/aiModelTest.sh"     aistackModelTest
 fi
 
 # Whole-script entry points, so the shell offers the same commands as the repo.
 # These run the root dispatch wrappers, which pick the right OS folder.
-testAllAiModels() { "${AI_STACK_HOME}/testAllAiModels.sh" "$@"; }
+aistackTestAllAiModels() { "${AI_STACK_HOME}/testAllAiModels.sh" "$@"; }
 aistackNoRole()          { "${AI_STACK_HOME}/noRole.sh" "$@"; }
 
 # List everything this integration provides, grouped by layer.
-# Run aiStackHelp after a shell restart to confirm the wiring took effect and
+# Run aistackHelp after a shell restart to confirm the wiring took effect and
 # to see the step names without opening the scripts.
-aiStackHelp() {
+aistackHelp() {
     echo "AI stack — repo: ${AI_STACK_HOME}   os: ${AI_STACK_OS_DIR:-UNSUPPORTED}"
     if [ -z "$AI_STACK_OS_DIR" ]; then
         echo "  This OS has no implementations yet — nothing is available."
         return 1
     fi
     local group
-    for group in aistackInstall uninstallAiStack aistackLaunchInference aistackModelTest; do
+    for group in aistackInstall aistackUninstall aistackLaunchInference aistackModelTest; do
         echo
         echo "  ${group}*"
-        # shellcheck disable=SC2086
-        for f in $AI_STACK_FUNCS; do
+        # $(echo ...) not $VAR: zsh does not word-split a plain parameter
+        # expansion, so "for f in $AI_STACK_FUNCS" would iterate once over the
+        # whole string and list nothing.
+        for f in $(echo "$AI_STACK_FUNCS"); do
             case "$f" in ${group}*) echo "      $f" ;; esac
         done
     done
     echo
     echo "  whole scripts"
-    echo "      testAllAiModels    aistackNoRole <Role>"
+    echo "      aistackTestAllAiModels    aistackNoRole <Role>"
     echo
     echo "  full wizards:  ${AI_STACK_HOME}/install.sh   uninstall.sh   launchInference.sh"
 }

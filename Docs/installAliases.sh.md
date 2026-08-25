@@ -13,16 +13,16 @@ your shell rc that source [shellFunctions.sh](../shellFunctions.sh):
 After a shell restart:
 
 ```bash
-aiStackHelp                     # list everything available
+aistackHelp                     # list everything available
 aistackInstallOllamaModels      # just the Ollama download menu
 aistackLaunchInferenceKillPrevious     # free the GPU without a full launch
 aistackModelTest Ollama qwen3.6:35b-a3b
-uninstallAiStackPiCodingAgent
-testAllAiModels
+aistackUninstallPiCodingAgent
+aistackTestAllAiModels
 aistackNoRole Docker
 ```
 
-55 functions at present: `aistackInstall*`, `uninstallAiStack*`,
+55 functions at present: `aistackInstall*`, `aistackUninstall*`,
 `aistackLaunchInference*`, `aistackModelTest*`, plus the whole-script entry points.
 
 ## How it works

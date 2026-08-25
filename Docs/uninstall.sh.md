@@ -4,7 +4,7 @@
 
 Removes the stack that `install.sh` builds, one layer at a time, asking before
 every action. Structurally it is the mirror image of the installer: same
-function-per-step shape, same prefix convention (`uninstallAiStack*`, with
+function-per-step shape, same prefix convention (`aistackUninstall*`, with
 `Ollama` in the name only for engine-specific layers), same `source`-and-call
 usability — but the order is reversed, from the **most dependent** layer down
 to the foundations.
@@ -12,10 +12,10 @@ to the foundations.
 ## The gate
 
 **While any Ollama model is installed, nothing below it may be removed.**
-`uninstallAiStackOllamaModels` returns non-zero if models remain, and the
+`aistackUninstallOllamaModels` returns non-zero if models remain, and the
 wrapper stops right there, keeping Ollama, mlx-lm, the Claude CLI and uv —
 everything the models depend on. Remove every model to reach the foundation
-layers. `uninstallAiStackOllamaEngine` enforces the same rule independently, so
+layers. `aistackUninstallOllamaEngine` enforces the same rule independently, so
 it refuses even when called directly with models present.
 
 ## How it works — one function per layer
@@ -26,20 +26,20 @@ depends on it) → **coding agents** (they sit above the engines) → **engines*
 
 | Function | Layer | Behavior |
 |---|---|---|
-| `uninstallAiStackOllamaModels` | the models — **gate** | Numbered menu mirroring the installer's download menu: models with sizes and current free disk, pick by number to remove (freed GB reported), menu re-renders, until none remain (→ descend) or **N** cancels the whole uninstall. Starts the Ollama server temporarily if needed, stops it again on every exit path. |
-| `uninstallAiStackMacmonMonitoring` | macmon | Default **No** — small, useful beside any workload, and unrelated to whether you keep the models |
-| `uninstallAiStackAnubisMonitoring` | Anubis OSS | Default **No**. Removes the cask, then offers brew's `--zap` separately — that clears your saved benchmark history, which is not something an uninstall should take by default |
-| `uninstallAiStackLitellmMonitoring` | LiteLLM proxy | Default **No**; offers `~/.litellm` separately, since it can hold provider keys |
-| `uninstallAiStackClaudeCodingAgent` | Claude Code CLI | Default **No** — it may be running this session. `~/.claude` (sessions, settings, memory) is never touched |
-| `uninstallAiStackOpenCodeCodingAgent` | OpenCode | Brew or npm, whichever installed it; offers `~/.config/opencode` separately |
-| `uninstallAiStackPiCodingAgent` | Pi | npm package; offers `~/.pi` separately |
-| `uninstallAiStackMlx` | mlx-lm / MLX-LM engine | Removes the uv tool, then offers the separate (often large) `~/.cache/huggingface` model cache — default No, since it is pure re-downloadable cache. |
-| `uninstallAiStackOllamaEngine` | Ollama runtime | Refuses while models exist. Otherwise stops every way it can be running (brew service, LAN LaunchAgent, app, bare `ollama serve`), then removes the brew formula, the standalone `.app` plus its five support paths, and the stray `/usr/local/bin/ollama` symlink. |
-| `uninstallAiStackOllamaData` | `~/.ollama` | The only unrecoverable step: every model blob plus this machine's registry keypair. Size shown, **double confirmation**, both defaulting to No. |
-| `uninstallAiStackUv` | uv | Warns which tools uv still manages before asking (default No). |
-| `uninstallAiStackHomebrew` | Homebrew | Reports only — never removed, since it manages software far beyond this stack. |
-| `uninstallAiStackStatus` | — | What is left standing, plus free disk. Also printed when the gate stops the run. |
-| `uninstallAiStack` | wrapper | Runs the layers in order, enforcing the gate. |
+| `aistackUninstallOllamaModels` | the models — **gate** | Numbered menu mirroring the installer's download menu: models with sizes and current free disk, pick by number to remove (freed GB reported), menu re-renders, until none remain (→ descend) or **N** cancels the whole uninstall. Starts the Ollama server temporarily if needed, stops it again on every exit path. |
+| `aistackUninstallMacmonMonitoring` | macmon | Default **No** — small, useful beside any workload, and unrelated to whether you keep the models |
+| `aistackUninstallAnubisMonitoring` | Anubis OSS | Default **No**. Removes the cask, then offers brew's `--zap` separately — that clears your saved benchmark history, which is not something an uninstall should take by default |
+| `aistackUninstallLitellmMonitoring` | LiteLLM proxy | Default **No**; offers `~/.litellm` separately, since it can hold provider keys |
+| `aistackUninstallClaudeCodingAgent` | Claude Code CLI | Default **No** — it may be running this session. `~/.claude` (sessions, settings, memory) is never touched |
+| `aistackUninstallOpenCodeCodingAgent` | OpenCode | Brew or npm, whichever installed it; offers `~/.config/opencode` separately |
+| `aistackUninstallPiCodingAgent` | Pi | npm package; offers `~/.pi` separately |
+| `aistackUninstallMlx` | mlx-lm / MLX-LM engine | Removes the uv tool, then offers the separate (often large) `~/.cache/huggingface` model cache — default No, since it is pure re-downloadable cache. |
+| `aistackUninstallOllamaEngine` | Ollama runtime | Refuses while models exist. Otherwise stops every way it can be running (brew service, LAN LaunchAgent, app, bare `ollama serve`), then removes the brew formula, the standalone `.app` plus its five support paths, and the stray `/usr/local/bin/ollama` symlink. |
+| `aistackUninstallOllamaData` | `~/.ollama` | The only unrecoverable step: every model blob plus this machine's registry keypair. Size shown, **double confirmation**, both defaulting to No. |
+| `aistackUninstallUv` | uv | Warns which tools uv still manages before asking (default No). |
+| `aistackUninstallHomebrew` | Homebrew | Reports only — never removed, since it manages software far beyond this stack. |
+| `aistackUninstallStatus` | — | What is left standing, plus free disk. Also printed when the gate stops the run. |
+| `aistackUninstall` | wrapper | Runs the layers in order, enforcing the gate. |
 
 ## Why it is necessary
 
@@ -63,5 +63,5 @@ depends on it) → **coding agents** (they sit above the engines) → **engines*
 
 ```bash
 source uninstall.sh                     # à la carte, e.g.:
-uninstallAiStackMlx                     # just drop mlx-lm
+aistackUninstallMlx                     # just drop mlx-lm
 ```
