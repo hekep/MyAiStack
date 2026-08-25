@@ -19,7 +19,7 @@ different engines are directly comparable.
 | Function | Layer tested | Pass means |
 |---|---|---|
 | `aiModelTestEngineSelector` | — | Numeric menu of engines that actually **have downloaded models**; announced without a question when only one qualifies |
-| `aiModelTestModelSelector` | — | That engine's downloaded models (shares `launchInferenceModelSelector`) |
+| `aiModelTestModelSelector` | — | That engine's downloaded models (shares `aistackLaunchInferenceModelSelector`) |
 | `aiModelTestPromptSelector` | — | Asks what to send, defaulting to the weather prompt. Skipped when `PROMPT` is already set (e.g. by the sweep script) |
 | `aiModelTestEnsureServing` | — | Starts or re-points the engine at the chosen model: Ollama daemon, or `llama-server -m <gguf>`, or `mlx_lm.server --model <repo>`. A server already serving a *different* model is restarted |
 | `aiModelTestServer` | endpoint reachable | the engine answers |
@@ -45,12 +45,12 @@ arguments prints usage rather than a bash error, and the hints are resolved
 live — the engine line names what this machine actually has:
 
 ```
-$ launchInferencePrerequisites
- ✗  usage: launchInferencePrerequisites <engine> <model> <context-tokens>
+$ aistackLaunchInferencePrerequisites
+ ✗  usage: aistackLaunchInferencePrerequisites <engine> <model> <context-tokens>
          engine  : Llama.cpp Ollama
          model   : one of that engine's models — list: engineListInstalled <engine>
          context : tokens, e.g. 32768 / 65536 / 131072
-         example : launchInferencePrerequisites Ollama qwen3.6:35b-a3b 32768
+         example : aistackLaunchInferencePrerequisites Ollama qwen3.6:35b-a3b 32768
 ```
 
 Return code is 2 for a usage error, distinct from a step that ran and failed.
@@ -73,7 +73,7 @@ PROMPT="Explain APFS snapshots" ./aiModelTest.sh   # prompt preset, not asked
 ```
 
 With no argument, the script sources [launchInference.sh](launchInference.sh.md)
-and reuses its `launchInferenceModelSelector` — the same numbered menu of
+and reuses its `aistackLaunchInferenceModelSelector` — the same numbered menu of
 installed models (name + size, pick by number) — so the two tools share one
 selector implementation instead of duplicating it. If the launcher script is
 missing, it falls back to testing the first downloaded model.

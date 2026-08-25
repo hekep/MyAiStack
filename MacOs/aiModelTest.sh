@@ -109,7 +109,7 @@ aiModelTestModelSelector() {
             "$(_hintExamples aiModelTestModelSelector engine)"
         return 2
     fi
-    launchInferenceModelSelector "$1"
+    aistackLaunchInferenceModelSelector "$1"
 }
 
 # ---------- make the engine serve this model ---------------------------------

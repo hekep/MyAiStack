@@ -15,17 +15,17 @@ three engines.)
 
 | Function | What | Notes |
 |---|---|---|
-| `launchInferenceEngineSelector` | Lists engines that are installed **and have at least one model downloaded**, with their model counts | An engine with nothing downloaded cannot be launched, so it is never offered — just named once ("installed but no models downloaded"). Asked only when more than one engine qualifies; with exactly one it says so and proceeds. Previous choice is the default |
-| `launchInferenceModelSelector <engine>` | Numbered menu of the models installed **for that engine**, with on-disk sizes | **Not asked when the engine has only one model** — it is announced and used. Ollama reads `ollama list`; llama.cpp scans `~/Models/llama.cpp`; MLX-LM scans the HuggingFace cache |
-| `launchInferenceContextSelector <engine> <model>` | **Numeric menu: 32K / 64K / 128K (default) / 256K / 512K / 1024K** | Larger sizes appear **only when they fit**: weights + estimated KV cache + 2 GB must stay inside the GPU budget. For Ollama it also queries `/api/show` for the model's own ceiling. **Not asked when only one size fits.** |
-| `launchInferenceNetworkSelector <engine>` | localhost (default) or LAN — **for every engine**, not just Ollama | Refuses non-private addresses, warns that no engine authenticates, notes the DHCP caveat |
-| `launchInferenceFreeResources` | Every open desktop app **over 100 MB**, biggest memory first, `Close? [y/N]` | Enter means NO. Skipped: the app hosting this session (found by walking the parent-process chain), Finder, the engines, and the monitoring tools — closing macmon or Anubis would defeat their purpose. Apps under the threshold are counted, not asked about; override with `FREE_MIN_MB` |
-| `launchInferencePrerequisites <engine> <model> <ctx>` | Hard gate: weights + KV + runtime vs. GPU budget | Fails with the exact `sysctl` command to raise the limit |
-| `launchInferenceStart <engine> <model> <ctx> <bind>` | Starts the engine's server and reports endpoint, memory and CPU | Offers to restart a server that is already running. Sets `LAUNCH_ENDPOINT` |
-| `launchInferenceClaudeCli <engine> <model>` | Claude CLI wired to the endpoint, with the session question (C/r/n) and a small local model on the background tier | **Ollama only** — see below |
-| `launchInference` | Wrapper: runs all of the above in order | — |
+| `aistackLaunchInferenceEngineSelector` | Lists engines that are installed **and have at least one model downloaded**, with their model counts | An engine with nothing downloaded cannot be launched, so it is never offered — just named once ("installed but no models downloaded"). Asked only when more than one engine qualifies; with exactly one it says so and proceeds. Previous choice is the default |
+| `aistackLaunchInferenceModelSelector <engine>` | Numbered menu of the models installed **for that engine**, with on-disk sizes | **Not asked when the engine has only one model** — it is announced and used. Ollama reads `ollama list`; llama.cpp scans `~/Models/llama.cpp`; MLX-LM scans the HuggingFace cache |
+| `aistackLaunchInferenceContextSelector <engine> <model>` | **Numeric menu: 32K / 64K / 128K (default) / 256K / 512K / 1024K** | Larger sizes appear **only when they fit**: weights + estimated KV cache + 2 GB must stay inside the GPU budget. For Ollama it also queries `/api/show` for the model's own ceiling. **Not asked when only one size fits.** |
+| `aistackLaunchInferenceNetworkSelector <engine>` | localhost (default) or LAN — **for every engine**, not just Ollama | Refuses non-private addresses, warns that no engine authenticates, notes the DHCP caveat |
+| `aistackLaunchInferenceFreeResources` | Every open desktop app **over 100 MB**, biggest memory first, `Close? [y/N]` | Enter means NO. Skipped: the app hosting this session (found by walking the parent-process chain), Finder, the engines, and the monitoring tools — closing macmon or Anubis would defeat their purpose. Apps under the threshold are counted, not asked about; override with `FREE_MIN_MB` |
+| `aistackLaunchInferencePrerequisites <engine> <model> <ctx>` | Hard gate: weights + KV + runtime vs. GPU budget | Fails with the exact `sysctl` command to raise the limit |
+| `aistackLaunchInferenceStart <engine> <model> <ctx> <bind>` | Starts the engine's server and reports endpoint, memory and CPU | Offers to restart a server that is already running. Sets `LAUNCH_ENDPOINT` |
+| `aistackLaunchInferenceClaudeCli <engine> <model>` | Claude CLI wired to the endpoint, with the session question (C/r/n) and a small local model on the background tier | **Ollama only** — see below |
+| `aistackLaunchInference` | Wrapper: runs all of the above in order | — |
 
-Choices persist in `~/.launchInference.conf`, so the next run defaults to what
+Choices persist in `~/.aistackLaunchInference.conf`, so the next run defaults to what
 you picked last.
 
 **Self-answering questions are never asked.** Every selector — engine, model,
@@ -76,9 +76,9 @@ Each launcher refuses early rather than half-working:
    ! Download more with:  aistackInstallLlamacppModels
    ```
 4. **agent incompatible with the engine** → says which API is missing.
-5. **nothing serving the engine** → gives the `launchInferenceStart` line for a
+5. **nothing serving the engine** → gives the `aistackLaunchInferenceStart` line for a
    model you actually have. `LAUNCH_ENDPOINT` is only set by
-   `launchInferenceStart`, so a launcher called on its own derives the endpoint
+   `aistackLaunchInferenceStart`, so a launcher called on its own derives the endpoint
    and verifies it instead of writing an empty URL into the agent's config.
 
 ## The context estimate
@@ -100,12 +100,12 @@ arguments prints usage rather than a bash error, and the hints are resolved
 live — the engine line names what this machine actually has:
 
 ```
-$ launchInferencePrerequisites
- ✗  usage: launchInferencePrerequisites <engine> <model> <context-tokens>
+$ aistackLaunchInferencePrerequisites
+ ✗  usage: aistackLaunchInferencePrerequisites <engine> <model> <context-tokens>
          engine  : Llama.cpp Ollama
          model   : one of that engine's models — list: engineListInstalled <engine>
          context : tokens, e.g. 32768 / 65536 / 131072
-         example : launchInferencePrerequisites Ollama qwen3.6:35b-a3b 32768
+         example : aistackLaunchInferencePrerequisites Ollama qwen3.6:35b-a3b 32768
 ```
 
 Return code is 2 for a usage error, distinct from a step that ran and failed.
@@ -131,5 +131,5 @@ Return code is 2 for a usage error, distinct from a step that ran and failed.
 
 ```bash
 source launchInference.sh                  # à la carte, e.g.:
-launchInferenceStart Ollama qwen3.6:35b-a3b 131072 127.0.0.1
+aistackLaunchInferenceStart Ollama qwen3.6:35b-a3b 131072 127.0.0.1
 ```

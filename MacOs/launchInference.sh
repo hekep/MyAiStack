@@ -7,20 +7,20 @@
 # which engine, which model, how much context, which network interface, how
 # much memory to free first, and how to keep the model resident.
 #
-#   launchInferenceEngineSelector    -> engine (asked only if several exist)
-#   launchInferenceModelSelector     -> a model installed FOR that engine
-#   launchInferenceContextSelector   -> 32K / 64K / 128K (default) / bigger
-#   launchInferenceNetworkSelector   -> localhost or LAN, for ANY engine
-#   launchInferenceFreeResources     -> close memory-hungry desktop apps
-#   launchInferenceKillPrevious      -> stop engines/models already serving, so
+#   aistackLaunchInferenceEngineSelector    -> engine (asked only if several exist)
+#   aistackLaunchInferenceModelSelector     -> a model installed FOR that engine
+#   aistackLaunchInferenceContextSelector   -> 32K / 64K / 128K (default) / bigger
+#   aistackLaunchInferenceNetworkSelector   -> localhost or LAN, for ANY engine
+#   aistackLaunchInferenceFreeResources     -> close memory-hungry desktop apps
+#   aistackLaunchInferenceKillPrevious      -> stop engines/models already serving, so
 #                                       the new model gets the whole machine
-#   launchInferencePrerequisites     -> weights + KV cache must fit the GPU
-#   launchInferenceStart             -> start the engine's server, report usage
-#   launchInferenceAgentSelector     -> coding agent, filtered by engine
+#   aistackLaunchInferencePrerequisites     -> weights + KV cache must fit the GPU
+#   aistackLaunchInferenceStart             -> start the engine's server, report usage
+#   aistackLaunchInferenceAgentSelector     -> coding agent, filtered by engine
 #                                       compatibility (self-answering when
 #                                       only one option is valid)
-#   launchInferenceStartAgent        -> Pi / OpenCode / Claude on the endpoint
-#   launchInference                  -> wrapper: runs all of the above in order
+#   aistackLaunchInferenceStartAgent        -> Pi / OpenCode / Claude on the endpoint
+#   aistackLaunchInference                  -> wrapper: runs all of the above in order
 #
 # Usage:
 #   ./launchInference.sh             # full flow
@@ -81,12 +81,12 @@ ask_val() {  # free-form with default; echoes the answer
 }
 
 # ---------- persisted choices (previous answer = next default) ---------------
-SETTINGS_FILE="$HOME/.launchInference.conf"
-# Read one persisted setting from ~/.launchInference.conf.
+SETTINGS_FILE="$HOME/.aistackLaunchInference.conf"
+# Read one persisted setting from ~/.aistackLaunchInference.conf.
 # Args: <key>. Prints the value, or nothing when unset.
 # This is what makes the previous run's choice the next run's default.
-tune_get() { [ $# -ge 1 ] || { aiStackUsage "tune_get <key>" "reads ~/.launchInference.conf" "example : tune_get CTX_Ollama"; return 2; }; [ -f "$SETTINGS_FILE" ] && sed -n "s/^$1=//p" "$SETTINGS_FILE" | tail -1; }
-# Persist one setting to ~/.launchInference.conf, replacing any earlier value.
+tune_get() { [ $# -ge 1 ] || { aiStackUsage "tune_get <key>" "reads ~/.aistackLaunchInference.conf" "example : tune_get CTX_Ollama"; return 2; }; [ -f "$SETTINGS_FILE" ] && sed -n "s/^$1=//p" "$SETTINGS_FILE" | tail -1; }
+# Persist one setting to ~/.aistackLaunchInference.conf, replacing any earlier value.
 # Args: <key> <value>. Rewrites the file rather than appending, so the file
 # does not grow one line per launch.
 tune_set() {
@@ -461,7 +461,7 @@ except Exception: print(0)' "$mf"
 # Choose which engine to launch; prints it on stdout.
 # Offers only engines that have models, naming any installed-but-empty ones once.
 # Asks nothing when exactly one qualifies. Previous choice is the default.
-launchInferenceEngineSelector() {
+aistackLaunchInferenceEngineSelector() {
     local engines=() e empty=""
     while IFS= read -r e; do [ -n "$e" ] && engines+=("$e"); done < <(enginesWithModels)
 
@@ -516,11 +516,11 @@ launchInferenceEngineSelector() {
 # Choose which of that engine's models to run; prints the tag on stdout.
 # Args: <engine>. Lists sizes alongside names. When the engine has exactly one
 # model it is announced and used — a question with one answer is not a choice.
-launchInferenceModelSelector() {
+aistackLaunchInferenceModelSelector() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "launchInferenceModelSelector <engine>" \
+        aiStackUsage "aistackLaunchInferenceModelSelector <engine>" \
             "$(_hintEngine)" \
-            "$(_hintExamples launchInferenceModelSelector engine)"
+            "$(_hintExamples aistackLaunchInferenceModelSelector engine)"
         return 2
     fi
     local engine="${1:-}" models=() m
@@ -561,12 +561,12 @@ launchInferenceModelSelector() {
 # Args: <engine> <model>. Offers 32K/64K/128K (default) and larger, but only
 # sizes whose weights + estimated KV cache + runtime fit the GPU budget; for
 # Ollama it also hides anything above the model's own ceiling from /api/show.
-launchInferenceContextSelector() {
+aistackLaunchInferenceContextSelector() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "launchInferenceContextSelector <engine> <model>" \
+        aiStackUsage "aistackLaunchInferenceContextSelector <engine> <model>" \
             "$(_hintEngine)" \
             "$(_hintModel)" \
-            "$(_hintExamples launchInferenceContextSelector engine-model)"
+            "$(_hintExamples aistackLaunchInferenceContextSelector engine-model)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" size_gb gpu_gb total_gb limit_mb
@@ -641,12 +641,12 @@ except Exception: print(0)' 2>/dev/null)
 # Args: <engine>. Asked for every engine, not just Ollama, because all three
 # serve over a socket and none of them authenticate. Refuses to bind a
 # non-private address, and warns that LAN mode is open to the whole network.
-launchInferenceNetworkSelector() {
+aistackLaunchInferenceNetworkSelector() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "launchInferenceNetworkSelector <engine>" \
+        aiStackUsage "aistackLaunchInferenceNetworkSelector <engine>" \
             "$(_hintEngine)" \
             "prints  : the bind address (127.0.0.1 or your LAN IP)" \
-            "$(_hintExamples launchInferenceNetworkSelector engine)"
+            "$(_hintExamples aistackLaunchInferenceNetworkSelector engine)"
         return 2
     fi
     local engine="${1:-}" ip def sel
@@ -682,12 +682,12 @@ launchInferenceNetworkSelector() {
 # Args: <engine>. Offers only agents that are installed AND compatible with this
 # engine, naming incompatible ones with the reason. One valid option answers
 # itself; none leaves the server running and says what would have worked.
-launchInferenceAgentSelector() {
+aistackLaunchInferenceAgentSelector() {
     if [ $# -lt 1 ]; then
-        aiStackUsage "launchInferenceAgentSelector <engine>" \
+        aiStackUsage "aistackLaunchInferenceAgentSelector <engine>" \
             "$(_hintEngine)" \
             "prints  : Pi | OpenCode | Claude | none, filtered by compatibility" \
-            "$(_hintExamples launchInferenceAgentSelector engine)"
+            "$(_hintExamples aistackLaunchInferenceAgentSelector engine)"
         return 2
     fi
     local engine="${1:-}" all=() usable=() blocked=() a
@@ -740,7 +740,7 @@ launchInferenceAgentSelector() {
 # Args: <engine about to launch>. Lists what is running with its memory first.
 # Unloads Ollama models but keeps the cheap daemon; can stop the daemon too when
 # switching engines. Declining is fine — the new model just gets less memory.
-launchInferenceKillPrevious() {
+aistackLaunchInferenceKillPrevious() {
     local target="${1:-}" rows line eng what mem killed=0
     rows=$(runningEngines)
     if [ -z "$rows" ]; then
@@ -795,7 +795,7 @@ launchInferenceKillPrevious() {
 # skipped by walking the parent-process chain — otherwise the script could close
 # the terminal it runs in. Also skipped: Finder, the engines, and the monitoring
 # tools, which exist to watch this very run.
-launchInferenceFreeResources() {
+aistackLaunchInferenceFreeResources() {
     local FREE_MIN_MB="${FREE_MIN_MB:-100}"
     info "Scanning open desktop applications (over ${FREE_MIN_MB} MB)..."
     local ancestors="" anc=$$
@@ -872,13 +872,13 @@ launchInferenceFreeResources() {
 # Args: <engine> <model> <context>. Compares weights + KV estimate + runtime
 # against the GPU budget and fails with the exact sysctl to raise the limit.
 # Runs before anything is loaded, because discovering it afterwards means swap.
-launchInferencePrerequisites() {
+aistackLaunchInferencePrerequisites() {
     if [ $# -lt 3 ]; then
-        aiStackUsage "launchInferencePrerequisites <engine> <model> <context-tokens>" \
+        aiStackUsage "aistackLaunchInferencePrerequisites <engine> <model> <context-tokens>" \
             "$(_hintEngine)" \
             "$(_hintModel)" \
             "context : tokens, e.g. 32768 / 65536 / 131072" \
-            "$(_hintExamples launchInferencePrerequisites engine-model-ctx)"
+            "$(_hintExamples aistackLaunchInferencePrerequisites engine-model-ctx)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" ctx="${3:-}" size_gb kv need gpu_gb total_gb limit_mb avail
@@ -908,14 +908,14 @@ launchInferencePrerequisites() {
 # Args: <engine> <model> <context> <bind>. Offers to restart a server already
 # running, waits for real readiness, then reports endpoint, memory and CPU.
 # Sets LAUNCH_ENDPOINT, which the agent step consumes.
-launchInferenceStart() {
+aistackLaunchInferenceStart() {
     if [ $# -lt 4 ]; then
-        aiStackUsage "launchInferenceStart <engine> <model> <context-tokens> <bind-address>" \
+        aiStackUsage "aistackLaunchInferenceStart <engine> <model> <context-tokens> <bind-address>" \
             "$(_hintEngine)" \
             "$(_hintModel)" \
             "context : tokens, e.g. 32768" \
             "bind    : 127.0.0.1 (local) or this Mac's LAN IP" \
-            "$(_hintExamples launchInferenceStart engine-model-ctx-bind)"
+            "$(_hintExamples aistackLaunchInferenceStart engine-model-ctx-bind)"
         return 2
     fi
     local engine="${1:-}" model="${2:-}" ctx="${3:-}" bind="${4:-}" port
@@ -1012,14 +1012,14 @@ except Exception: print("")' 2>/dev/null
 # Hand the running endpoint to the chosen coding agent.
 # Args: <agent> <engine> <model>. Dispatches to the per-agent launcher, or
 # prints the endpoint and stops when the agent is "none".
-launchInferenceStartAgent() {
+aistackLaunchInferenceStartAgent() {
     if [ $# -lt 3 ]; then
-        aiStackUsage "launchInferenceStartAgent <agent> <engine> <model>" \
+        aiStackUsage "aistackLaunchInferenceStartAgent <agent> <engine> <model>" \
             "agent   : Pi | OpenCode | Claude | none" \
             "$(_hintEngine)" \
             "$(_hintModel)" \
-            "note    : needs LAUNCH_ENDPOINT set by launchInferenceStart" \
-            "$(_hintExamples launchInferenceStartAgent agent-engine-model)"
+            "note    : needs LAUNCH_ENDPOINT set by aistackLaunchInferenceStart" \
+            "$(_hintExamples aistackLaunchInferenceStartAgent agent-engine-model)"
         return 2
     fi
     local agent="${1:-}" engine="${2:-}" model="${3:-}" endpoint="${LAUNCH_ENDPOINT:-}"
@@ -1029,9 +1029,9 @@ launchInferenceStartAgent() {
         return 0
     }
     case "$agent" in
-        Claude)   launchInferenceAgentClaude   "$engine" "$model" ;;
-        Pi)       launchInferenceAgentPi       "$engine" "$model" ;;
-        OpenCode) launchInferenceAgentOpenCode "$engine" "$model" ;;
+        Claude)   aistackLaunchInferenceAgentClaude   "$engine" "$model" ;;
+        Pi)       aistackLaunchInferenceAgentPi       "$engine" "$model" ;;
+        OpenCode) aistackLaunchInferenceAgentOpenCode "$engine" "$model" ;;
     esac
 }
 
@@ -1125,7 +1125,7 @@ _requireAgent() {
 # Resolve the endpoint to hand to a coding agent, and prove something is
 # actually serving it. Args: <engine>. Prints the URL, or fails with the exact
 # command that starts the engine.
-# LAUNCH_ENDPOINT is only set by launchInferenceStart, so an agent launcher
+# LAUNCH_ENDPOINT is only set by aistackLaunchInferenceStart, so an agent launcher
 # called on its own would otherwise write an empty URL into the agent's config
 # — which looks like it worked and then reports "no models discovered".
 _resolveEndpointFor() {
@@ -1141,8 +1141,8 @@ _resolveEndpointFor() {
     m=$(engineListInstalled "$engine" 2>/dev/null | head -1)
     if [ -n "$m" ]; then
         warn "Start it first:"
-        warn "    launchInferenceStart ${engine} ${m} 32768 127.0.0.1"
-        warn "or run the whole flow:  launchInference"
+        warn "    aistackLaunchInferenceStart ${engine} ${m} 32768 127.0.0.1"
+        warn "or run the whole flow:  aistackLaunchInference"
     else
         warn "No ${engine} models installed either — download one first:"
         warn "    $(_modelInstallerFor "$engine")"
@@ -1155,12 +1155,12 @@ _resolveEndpointFor() {
 # Ollama only: Claude Code speaks the Anthropic Messages API. Maps all three
 # model tiers to the local model, puts a small model on the background tier when
 # one exists, and offers continue/resume when this directory has sessions.
-launchInferenceAgentClaude() {
+aistackLaunchInferenceAgentClaude() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "launchInferenceAgentClaude <engine> <model>" \
+        aiStackUsage "aistackLaunchInferenceAgentClaude <engine> <model>" \
             "engine  : Ollama only — Claude Code needs the Anthropic API" \
             "model   : a tag for that engine — list: engineListInstalled <engine>" \
-            "$(_hintExamples launchInferenceAgentClaude engine-model Claude)"
+            "$(_hintExamples aistackLaunchInferenceAgentClaude engine-model Claude)"
         return 2
     fi
     local engine="$1" model="$2" endpoint
@@ -1205,12 +1205,12 @@ launchInferenceAgentClaude() {
 # Writes ~/.pi/agent/local-models.json ({url, apiKey}) — backing up any existing
 # one — and makes sure the local-models plugin is present. Pi discovers models
 # itself, so the model is picked inside Pi with /models.
-launchInferenceAgentPi() {
+aistackLaunchInferenceAgentPi() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "launchInferenceAgentPi <engine> <model>" \
+        aiStackUsage "aistackLaunchInferenceAgentPi <engine> <model>" \
             "engine  : Llama.cpp | MLX-LM | Ollama" \
             "model   : a tag for that engine — list: engineListInstalled <engine>" \
-            "$(_hintExamples launchInferenceAgentPi engine-model Pi)"
+            "$(_hintExamples aistackLaunchInferenceAgentPi engine-model Pi)"
         return 2
     fi
     local engine="$1" model="$2" endpoint cfg="$HOME/.pi/agent/local-models.json"
@@ -1238,12 +1238,12 @@ launchInferenceAgentPi() {
 # Merges a "local" provider into ~/.config/opencode/opencode.json (backing up
 # the old file) with baseURL inside "options" — OpenCode ignores it anywhere
 # else — keyed by the id the endpoint really advertises.
-launchInferenceAgentOpenCode() {
+aistackLaunchInferenceAgentOpenCode() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "launchInferenceAgentOpenCode <engine> <model>" \
+        aiStackUsage "aistackLaunchInferenceAgentOpenCode <engine> <model>" \
             "engine  : Llama.cpp | MLX-LM | Ollama" \
             "model   : a tag for that engine — list: engineListInstalled <engine>" \
-            "$(_hintExamples launchInferenceAgentOpenCode engine-model OpenCode)"
+            "$(_hintExamples aistackLaunchInferenceAgentOpenCode engine-model OpenCode)"
         return 2
     fi
     local engine="$1" model="$2" endpoint cfg="$HOME/.config/opencode/opencode.json" mid
@@ -1284,23 +1284,23 @@ PYEOF
 # Every selector answers itself when only one option is valid, so a repeat launch
 # of the same setup is mostly Enter. Any step returning non-zero stops the run
 # before anything is loaded.
-launchInference() {
+aistackLaunchInference() {
     echo "${BOLD}=============================================================${RESET}" >&2
     echo "${BOLD} Local inference — engine, model, context, network${RESET}" >&2
     echo "${BOLD}=============================================================${RESET}" >&2
     local engine model ctx bind agent
-    engine=$(launchInferenceEngineSelector) || return 1
-    model=$(launchInferenceModelSelector "$engine") || return 1
-    ctx=$(launchInferenceContextSelector "$engine" "$model") || return 1
-    bind=$(launchInferenceNetworkSelector "$engine") || return 1
-    launchInferenceFreeResources
-    launchInferenceKillPrevious "$engine"
-    launchInferencePrerequisites "$engine" "$model" "$ctx" || return 1
-    launchInferenceStart "$engine" "$model" "$ctx" "$bind" || return 1
-    agent=$(launchInferenceAgentSelector "$engine")
-    launchInferenceStartAgent "$agent" "$engine" "$model"
+    engine=$(aistackLaunchInferenceEngineSelector) || return 1
+    model=$(aistackLaunchInferenceModelSelector "$engine") || return 1
+    ctx=$(aistackLaunchInferenceContextSelector "$engine" "$model") || return 1
+    bind=$(aistackLaunchInferenceNetworkSelector "$engine") || return 1
+    aistackLaunchInferenceFreeResources
+    aistackLaunchInferenceKillPrevious "$engine"
+    aistackLaunchInferencePrerequisites "$engine" "$model" "$ctx" || return 1
+    aistackLaunchInferenceStart "$engine" "$model" "$ctx" "$bind" || return 1
+    agent=$(aistackLaunchInferenceAgentSelector "$engine")
+    aistackLaunchInferenceStartAgent "$agent" "$engine" "$model"
 }
 
 if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
-    launchInference
+    aistackLaunchInference
 fi
