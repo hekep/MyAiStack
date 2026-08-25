@@ -1,0 +1,248 @@
+#!/bin/bash
+#
+# testAllAiModels.sh — run the aistackModelTest suite over EVERY engine and every
+#                      model that engine has downloaded, with one prompt, then
+#                      print a single comparison table. Debian implementation.
+#
+# Asks for the test prompt once, then works through:
+#   for each engine that has models:
+#       for each of its models:
+#           start/point the engine at it, run the suite, stop it again
+#
+# Servers are stopped between models on purpose: a 30 GB model left resident
+# would starve the next one and make its numbers meaningless.
+#
+# Usage:  ./testAllAiModels.sh            PROMPT="..." ./testAllAiModels.sh
+#
+set -u
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "${DIR}/aiModelTest.sh"
+
+# Print a usage message for a function called without its arguments, return 2.
+# Args: <signature> [detail lines...]. Anything here can be called standalone
+# from a shell, so a bare call must explain itself rather than misbehave.
+aiStackUsage() {
+    local sig="$1"; shift
+    # fail() exists in the wizard scripts but not in every file that needs this
+    if command -v fail >/dev/null 2>&1; then fail "usage: ${sig}"
+    else echo "✗ usage: ${sig}" >&2; fi
+    local l
+    for l in "$@"; do echo "         ${l}" >&2; done
+    return 2
+}
+
+# ---------- free the hardware between models ---------------------------------
+# This is the difference between a clean sweep and an out-of-memory crash: a
+# 30 GB model left resident while the next 30 GB model loads takes the machine
+# down — and on Linux "takes the machine down" means the OOM killer picks a
+# victim, which may well be your desktop session rather than the model. So
+# teardown does NOT trust a recorded PID (a reused or stale server has none) —
+# it kills by pattern and then WAITS until the memory is really back.
+#
+# CAREFUL: our llama-server is identified by the port we serve on, never by the
+# bare name, so nothing else that happens to be called llama-server is touched.
+SWEEP_PIDS=""
+
+# Count inference servers still alive that this sweep may have started.
+# Covers our llama-server, matched by port. Prints a number, so callers can
+# poll it until teardown really finished.
+engineProcsAlive() {
+    llamacppOurPids | grep -c . || true
+}
+# Count models Ollama currently holds in memory ('ollama ps').
+# The daemon itself is not counted: idle, it holds nothing and costs nothing.
+# Prints a number, used as the second half of the teardown wait condition.
+ollamaResident() { ollama ps 2>/dev/null | awk 'NR>1' | grep -c . || true; }
+
+# Return the machine to an empty state before/after every model under test.
+# Unloads all Ollama models, stops our llama-server, then WAITS (up to 40 s,
+# escalating to SIGKILL at 20 s) until they are really gone. Without the wait,
+# a 30 GB model is still resident when the next one loads.
+freeAllEngines() {
+    local m i alive resident
+    # 1. unload every model Ollama is holding (daemon stays: it is cheap)
+    if curl -sf --max-time 2 "http://127.0.0.1:${OLLAMA_PORT}/api/version" >/dev/null 2>&1; then
+        for m in $(ollama ps 2>/dev/null | awk 'NR>1 {print $1}'); do
+            ollama stop "$m" >/dev/null 2>&1
+        done
+    fi
+    # 2. stop our llama-server
+    llamacppKillOurs
+    # 3. WAIT until they are actually gone — SIGTERM does not free 30 GB instantly
+    for i in $(seq 1 40); do
+        alive=$(engineProcsAlive); resident=$(ollamaResident)
+        [ "${alive:-0}" -eq 0 ] && [ "${resident:-0}" -eq 0 ] && break
+        sleep 1
+        [ "$i" -eq 20 ] && { llamacppOurPids | xargs -r kill -9 2>/dev/null; }
+    done
+    sleep 2
+    ok "Hardware free — $(freeMemGb) GB memory available."
+}
+
+# Memory available right now in GB, from /proc/meminfo MemAvailable.
+# Printed after teardown so the log shows what was actually recovered. The
+# kernel's own estimate, which is why this is a measurement and not a guess.
+freeMemGb() { availMemGbF; }
+
+# Backstop: can this single model load at all on this machine?
+# Args: <engine> <model>. True when weights + 4 GB fits the memory budget.
+# Deliberately looser than the install-time rule: teardown guarantees only one
+# model is resident, so the generous KV allowance would cause false skips.
+modelFitsNow() {
+    if [ $# -lt 2 ]; then
+        aiStackUsage "modelFitsNow <engine> <model>" \
+            "engine  : Llama.cpp | Ollama" \
+            "model   : a tag for that engine — list: engineListInstalled <engine>" \
+            "true when weights + 4 GB fits the memory budget" \
+            "$(_hintExamples modelFitsNow engine-model)"
+        return 2
+    fi
+    local engine="$1" model="$2" size need budget
+    size=$(engineModelSizeGb "$engine" "$model"); [ "${size:-0}" -lt 1 ] && size=1
+    budget=$(inferenceBudgetGb)
+    # single-model backstop only: with the teardown above, exactly one model is
+    # ever resident, and the sweep runs at the engine's default context — so the
+    # generous weights*1.3 allowance used when *choosing* a model would produce
+    # false skips here. weights + 4 GB matches what actually loads.
+    need=$(( size + 4 ))
+    [ "$need" -le "$budget" ]
+}
+
+# Tear down after one model has been measured.
+# A thin alias for freeAllEngines(): teardown is identical before and after,
+# and doing it in both places is what keeps two models from ever overlapping.
+stopEngineAfterTest() { freeAllEngines; }
+# Emergency teardown for the Ctrl-C / TERM trap.
+# Same work as freeAllEngines() but silent, so an interrupted sweep still
+# leaves the machine free instead of holding tens of GB.
+cleanupAll()          { freeAllEngines >/dev/null 2>&1; }
+trap 'echo; warn "Interrupted — stopping any server this sweep started."; cleanupAll; exit 130' INT TERM
+
+# ---------- the prompt, asked once for the whole sweep -----------------------
+DEFAULT_SWEEP_PROMPT="What would be next best feature to code"
+if [ -z "${PROMPT:-}" ]; then
+    printf "%sPrompt%s [empty = \"%s\"]: " "${BOLD}" "${RESET}" "${DEFAULT_SWEEP_PROMPT}"
+    read -r USER_PROMPT </dev/tty || USER_PROMPT=""
+    PROMPT="${USER_PROMPT:-$DEFAULT_SWEEP_PROMPT}"
+fi
+export PROMPT
+info "Test prompt: \"${PROMPT}\""
+info "Host: $(budgetSummary)"
+
+# ---------- anything already serving? ----------------------------------------
+# The sweep needs the machine to itself: it stops servers between models so
+# each one is measured on an empty machine. Say what is running before taking
+# it down, rather than killing the user's session silently.
+RUNNING=$(busyEngines)
+if [ -n "$RUNNING" ]; then
+    echo >&2
+    warn "${BOLD}A model is already loaded in memory:${RESET}"
+    while IFS='|' read -r eng what mem; do
+        [ -z "$eng" ] && continue
+        printf "    %-10s %-28s %s\n" "$eng" "$what" "$mem" >&2
+    done <<< "$RUNNING"
+    warn "Its model stays resident and would distort every measurement — and two"
+    warn "big models loaded at once can take the whole machine down."
+    if ask_yn "Tear it down and run the sweep?  (n = exit without testing)"; then
+        freeAllEngines
+    else
+        echo >&2
+        ok "Exiting — nothing was touched, your loaded model is untouched."
+        warn "The sweep needs the machine to itself: it stops engines between models"
+        warn "by design, so it cannot run alongside your session."
+        exit 0
+    fi
+else
+    ok "No model is resident — the machine is free for the sweep."
+fi
+
+# ---------- what is there to test --------------------------------------------
+ENGINES=()
+while IFS= read -r e; do [ -n "$e" ] && ENGINES+=("$e"); done < <(enginesWithModels)
+if [ "${#ENGINES[@]}" -eq 0 ]; then
+    fail "No engine has downloaded models — run ./install.sh first."
+    exit 1
+fi
+
+TOTAL_MODELS=0
+for e in "${ENGINES[@]}"; do
+    TOTAL_MODELS=$(( TOTAL_MODELS + $(engineListInstalled "$e" | grep -c . || true) ))
+done
+info "Sweeping ${#ENGINES[@]} engine(s), ${TOTAL_MODELS} model(s) in total:"
+for e in "${ENGINES[@]}"; do
+    echo "    ${e}: $(engineListInstalled "$e" | tr '\n' ' ')" >&2
+done
+
+# ---------- the sweep ---------------------------------------------------------
+ROWS=""
+IDX=0
+SWEEP_T0=$(date +%s)
+for engine in "${ENGINES[@]}"; do
+    while IFS= read -r model; do
+        [ -z "$model" ] && continue
+        IDX=$(( IDX + 1 ))
+        echo >&2
+        echo "${BOLD}=============================================================${RESET}" >&2
+        echo "${BOLD} [${IDX}/${TOTAL_MODELS}] ${engine} — ${model}${RESET}" >&2
+        echo "${BOLD}=============================================================${RESET}" >&2
+
+        aistackModelTestReset
+        # always start from an empty machine — never stack two models
+        freeAllEngines
+        T0=$(date +%s)
+        if ! modelFitsNow "$engine" "$model"; then
+            fail "$(engineModelSizeGb "$engine" "$model") GB model cannot fit the $(inferenceBudgetGb) GB budget — SKIPPED."
+            warn "Lower the OS reserve with RAM_RESERVE_GB=3, or use a smaller quant."
+            R_generate=SKIP
+            T1=$T0
+        elif aistackModelTestEnsureServing "$engine" "$model" && aistackModelTestServer "$engine"; then
+            [ -n "${TEST_SERVER_PID:-}" ] && SWEEP_PIDS="${SWEEP_PIDS} ${TEST_SERVER_PID}"
+            aistackModelTestRun "$engine" "$model"
+            T1=$(date +%s)
+        else
+            fail "Could not serve ${model} on ${engine} — recording as failed."
+            R_generate=FAIL
+            T1=$(date +%s)
+        fi
+
+        ROWS="${ROWS}${engine}|${model}|${G_TOKENS}|${G_TIME}s|${G_TPS}|${R_toolcall}|${R_context}|$((T1-T0))s
+"
+        stopEngineAfterTest "$engine" "$model"
+    done < <(engineListInstalled "$engine")
+done
+SWEEP_T1=$(date +%s)
+cleanupAll
+
+# ---------- comparison table --------------------------------------------------
+echo
+echo "${BOLD}============================== Comparison ==============================${RESET}"
+printf "${BOLD}%-10s %-42s %7s %7s %8s %-7s %-7s %7s${RESET}\n" \
+       "engine" "model" "tokens" "time" "tok/s" "tools" "ctx" "total"
+printf '%s\n' "--------------------------------------------------------------------------------------------------"
+printf '%s' "$ROWS" | while IFS='|' read -r e m tok t tps tool ctx total; do
+    [ -z "$e" ] && continue
+    case "$tool" in
+        PASS)  tool="${GREEN}PASS${RESET}" ;;
+        FLAKY) tool="${YELLOW}FLAKY${RESET}" ;;
+        FAIL)  tool="${RED}FAIL${RESET}" ;;
+    esac
+    case "$ctx" in
+        PASS) ctx="${GREEN}ok${RESET}" ;;
+        WARN) ctx="${YELLOW}?${RESET}" ;;
+        FAIL) ctx="${RED}small${RESET}" ;;
+        SKIP) ctx="-" ;;
+    esac
+    # trim long model ids from the left so the interesting end stays visible
+    if [ "${#m}" -gt 42 ]; then m="...${m: -39}"; fi
+    printf "%-10s %-42s %7s %7s %8s %-7b %-7b %7s\n" "$e" "$m" "$tok" "$t" "$tps" "$tool" "$ctx" "$total"
+done
+echo
+echo "host              = $(budgetSummary)"
+echo "                    llama.cpp backend: $(llamacppBackend)"
+echo "tokens/time/tok-s = generation only, measured identically on every engine"
+echo "                    (same OpenAI endpoint, warmup first, wall-clock timing)."
+echo "tools             = tool-calling: PASS / FLAKY (retry only) / FAIL."
+echo "ctx               = served context >= 32k?  (- = engine cannot report it)"
+echo "total             = whole per-model suite, including loading the model."
+echo "Sweep took $(( (SWEEP_T1 - SWEEP_T0) / 60 )) min $(( (SWEEP_T1 - SWEEP_T0) % 60 )) s."

@@ -9,9 +9,10 @@ The `*.sh` scripts in the repo root are thin **wrappers**: each one sources
 [common.sh](../common.sh), detects the host OS, and `exec`s the real
 implementation from the matching OS folder, forwarding all arguments:
 
-- `MacOs/` — the Apple Silicon macOS implementations (complete; everything
-  documented below lives here)
-- `Debian/` — Debian/Ubuntu implementations (to be generated later on that box)
+- `MacOs/` — the Apple Silicon macOS implementations (everything documented
+  below lives here)
+- `Debian/` — the Debian/Ubuntu implementations, documented separately in
+  [DebianDocs/](../DebianDocs/README.md)
 - Unsupported systems (e.g. Fedora/RHEL-based Linux) exit with a clear
   message instead of half-running.
 
@@ -25,6 +26,14 @@ Debian box.
 **Start here:** [SPECIFICATION.md](SPECIFICATION.md) — what the project is, the
 four layers, the naming contract and the invariants every change must keep.
 
+**Working across platforms:** [PlatformNotes.md](PlatformNotes.md) — what macOS
+and Debian share, where they diverge, and why. Most apparent inconsistencies
+between the two folders are platform facts recorded there; the rest are traps
+somebody already fell into.
+
+**The Debian side:** [DebianDocs/](../DebianDocs/README.md) — one document per
+Debian script, same shape as this folder.
+
 | Script | Doc | One-liner |
 |---|---|---|
 | [install.sh](../install.sh) | [install.sh.md](install.sh.md) | Multi-engine, re-runnable installer (`aistackInstall*` + `aistackInstall` wrapper): disk gate → **three engines** (llama.cpp default-yes, MLX-LM and Ollama optional; wizard cancels if none) → **coding agents** (Pi default-yes, OpenCode/Claude optional) → a RAM-aware model menu **per installed engine**, each from its own catalog → verification. |
@@ -34,7 +43,7 @@ four layers, the naming contract and the invariants every change must keep.
 | [MacOs/noCodexRole.sh](../MacOs/noCodexRole.sh) | [noCodexRole.sh.md](noCodexRole.sh.md) | Removes OpenAI Codex and ~2.2 GB of leftovers while guaranteeing ChatGPT survives; handles the two Codex/ChatGPT grey zones explicitly. Run via `./noRole.sh Codex`. |
 | [launchInference.sh](../launchInference.sh) | [launchInference.sh.md](launchInference.sh.md) | Runs a model: engine selector (asked when several are installed) → model → **context size menu (32K/64K/128K default/larger when it fits)** → network exposure (every engine) → free memory → fit check → start server → **coding agent** (compatibility-filtered: Pi/OpenCode any engine, Claude Ollama-only). |
 | [aiModelTest.sh](../aiModelTest.sh) | [aiModelTest.sh.md](aiModelTest.sh.md) | Tests one engine+model: **engine menu → model menu → prompt question**, then server → generation (tokens/sec) → Anthropic endpoint (Ollama only, SKIP elsewhere) → tool-calling (PASS/FLAKY/FAIL) → served context. Starts the right server for the chosen model. |
-| [installAliases.sh](../installAliases.sh) | [installAliases.sh.md](installAliases.sh.md) | Adds a marker-delimited block to your shell rc so all 55 step functions are callable from anywhere (`aistackHelp` lists them). Idempotent, backs up the rc, `--remove` undoes it. Runs each function in its own bash process, so helper names never leak into your shell. |
+| [installAliases.sh](../installAliases.sh) | [installAliases.sh.md](installAliases.sh.md) | Adds a marker-delimited block to your shell rc so every step function is callable from anywhere (`aistackHelp` lists them). Idempotent, backs up the rc, `--remove` undoes it. Runs each function in its own bash process, so helper names never leak into your shell. |
 | [testAllAiModels.sh](../testAllAiModels.sh) | [testAllAiModels.sh.md](testAllAiModels.sh.md) | Sweeps **every engine × every model it has**, one prompt for all, stopping each server between models so the next one gets clean memory. Ends with one table: engine, model, tokens, time, tok/s, tools, ctx, total. |
 
 ## Shared design principles

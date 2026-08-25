@@ -32,6 +32,11 @@ differs between uploaders: `Qwen_Qwen3.6-35B-A3B-Q6_K.gguf` vs
 `org__repo@QUANT.gguf`, an encoding the installer reverses to detect what is
 already present.
 
+A download in progress is called `org__repo@QUANT.gguf.part` and is renamed to
+`.gguf` only when its size matches the one HuggingFace reports. So the `.gguf`
+suffix means **complete**, and an interrupted pull is never mistaken for an
+installed model — it stays in the download menu, and re-selecting it resumes.
+
 Run a downloaded model with:
 
 ```bash

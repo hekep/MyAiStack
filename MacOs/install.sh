@@ -758,10 +758,34 @@ llamacppListInstalled() {
         printf '%s\n' "$(printf '%s' "$b" | sed 's|@|:|; s|__|/|g')"
     done
 }
+# List GGUF downloads that were interrupted, as "tag<TAB>bytes-so-far".
+# A .part file holds real disk and is invisible to every menu, so the model
+# step reports them rather than letting them accumulate unseen.
+llamacppListPartial() {
+    [ -d "$LLAMACPP_MODEL_DIR" ] || return 0
+    local f b
+    for f in "$LLAMACPP_MODEL_DIR"/*.gguf.part; do
+        [ -e "$f" ] || continue
+        b=$(basename "$f" .gguf.part)
+        printf '%s\t%s\n' "$(printf '%s' "$b" | sed 's|@|:|; s|__|/|g')" "$(fileSizeBytes "$f")"
+    done
+}
+
+# Size of a file in bytes, 0 when it does not exist.
+# macOS uses stat -f%z; the Debian copy of this function uses stat -c%s. That
+# one flag is the whole platform difference in the download path.
+fileSizeBytes() { [ -e "${1:-}" ] && stat -f%z "$1" 2>/dev/null || echo 0; }
+
 # Download one GGUF for llama.cpp.
-# Args: <tag>. Resolves the real filename from the repo tree first, because
-# uploaders name files differently, then fetches with curl -C - so an interrupted
+# Args: <tag>. Resolves the real filename AND its size from the repo tree first
+# — uploaders name files differently, and the size is what makes "finished" a
+# fact instead of an assumption — then fetches with curl -C - so an interrupted
 # download resumes instead of restarting — the thing Ollama's HF path cannot do.
+#
+# The bytes land in <name>.gguf.part and are renamed to <name>.gguf only once
+# the file is complete. Without that, an in-progress download already satisfies
+# the *.gguf glob every lister here uses, so a half-downloaded model shows up as
+# installed, reports 0 GB, is hidden from the download menu, and fails to load.
 llamacppPullModel() {
     if [ $# -lt 1 ]; then
         aiStackUsage "llamacppPullModel <tag>" \
@@ -774,15 +798,17 @@ llamacppPullModel() {
     # empty — or worse, silently picks up a same-named variable from the
     # caller's scope (local is dynamically scoped), which is why this worked
     # from aiStackModelMenu but not when called directly.
-    local tag="$1" out file url repo quant
+    local tag="$1" out part meta file expected have url repo quant
     repo="${tag%:*}"
     quant="${tag##*:}"
     out=$(llamacppLocalFile "$tag")
+    part="${out}.part"
     mkdir -p "$LLAMACPP_MODEL_DIR"
 
-    # resolve the real filename from the repo — uploaders name files differently
+    # resolve the real filename and its size — uploaders name files differently,
+    # and LFS entries carry the true byte count in .lfs.size
     info "Resolving the ${quant} GGUF in ${repo}..."
-    file=$(curl -sf --max-time 25 "https://huggingface.co/api/models/${repo}/tree/main" 2>/dev/null \
+    meta=$(curl -sf --max-time 25 "https://huggingface.co/api/models/${repo}/tree/main" 2>/dev/null \
         | python3 -c "
 import json, sys
 q = sys.argv[1]
@@ -793,22 +819,57 @@ except Exception:
 for e in t:
     p = e.get('path', '')
     if e.get('type') != 'directory' and p.endswith('-%s.gguf' % q):
-        print(p); break
+        lfs = e.get('lfs') or {}
+        print('%s\t%s' % (p, lfs.get('size') or e.get('size') or 0))
+        break
 " "$quant" 2>/dev/null)
+    file=${meta%%$'\t'*}
+    expected=${meta##*$'\t'}
+    case "${expected:-}" in ''|*[!0-9]*) expected=0 ;; esac
     if [ -z "$file" ]; then
         fail "No ${quant} GGUF found in ${repo} — skipping."
         return 1
     fi
+
+    # a .part that is already complete only needs its rename — the previous run
+    # may have been interrupted between the last byte and the mv
+    if [ -e "$part" ] && [ "$expected" -gt 0 ] && [ "$(fileSizeBytes "$part")" -eq "$expected" ]; then
+        mv -f "$part" "$out"
+        ok "${tag} was already fully downloaded — completed it ($(du -h "$out" 2>/dev/null | cut -f1))."
+        return 0
+    fi
+
+    if [ -e "$out" ]; then
+        have=$(fileSizeBytes "$out")
+        if [ "$expected" -eq 0 ] || [ "$have" -eq "$expected" ]; then
+            ok "${tag} is already downloaded ($(du -h "$out" 2>/dev/null | cut -f1))."
+            return 0
+        fi
+        # a short .gguf is debris from an interrupted download taken before
+        # completed files were distinguished by name — reopen it as .part so
+        # this run resumes it rather than ignoring it or starting over
+        warn "${out} is incomplete ($(( have / 1048576 )) MB of $(( expected / 1048576 )) MB) — resuming it."
+        mv -f "$out" "$part"
+    fi
+
     url="https://huggingface.co/${repo}/resolve/main/${file}"
     info "Downloading ${file}"
     echo "    -> ${out}"
-    echo "    (resumable: if this is interrupted, re-select the model to continue)"
-    if curl -L --fail --progress-bar -C - -o "$out" "$url"; then
+    echo "    (arrives as $(basename "$part") and is renamed only when complete, so an"
+    echo "     interrupted pull resumes and never looks like an installed model)"
+    if curl -L --fail --progress-bar -C - -o "$part" "$url"; then
+        have=$(fileSizeBytes "$part")
+        if [ "$expected" -gt 0 ] && [ "$have" -ne "$expected" ]; then
+            fail "Got ${have} bytes, expected ${expected} — keeping the partial file for a retry:"
+            fail "  ${part}"
+            return 1
+        fi
+        mv -f "$part" "$out"
         ok "${tag} downloaded ($(du -h "$out" 2>/dev/null | cut -f1))."
         return 0
     fi
     fail "Download failed — the partial file is kept so a retry resumes:"
-    fail "  ${out}"
+    fail "  ${part}"
     return 1
 }
 
@@ -1019,6 +1080,15 @@ aistackInstallLlamacppModels() {
         return 0
     fi
     echo "    Download directory: ${LLAMACPP_MODEL_DIR}"
+    # interrupted downloads hold real disk and appear in no menu, so name them
+    # here — where re-selecting the same model is what resumes them
+    local t b
+    if [ -n "$(llamacppListPartial)" ]; then
+        warn "Interrupted downloads found (re-select the same model to resume):"
+        while IFS=$'\t' read -r t b; do
+            [ -n "$t" ] && printf "      %-52s %s MB so far\n" "$t" "$(( b / 1048576 ))"
+        done < <(llamacppListPartial)
+    fi
     aiStackModelMenu "Llama.cpp" llamacppListInstalled llamacppPullModel
 }
 

@@ -6,18 +6,18 @@ contract they all implement.
 
 ## Purpose
 
-Run capable coding models locally on Apple Silicon, with every choice explicit
-and reversible. The stack is assembled from four independent layers, and the
+Run capable coding models locally — on Apple Silicon macOS and on Debian/Ubuntu
+— with every choice explicit and reversible. The stack is assembled from four independent layers, and the
 user is never asked a question the machine can answer for itself.
 
 ## The four layers
 
 | Layer | What it provides | Members |
 |---|---|---|
-| **Engine** | serves tokens over HTTP | llama.cpp *(default)*, MLX-LM, Ollama |
+| **Engine** | serves tokens over HTTP | llama.cpp *(default)*, Ollama, and MLX-LM on macOS only |
 | **Coding agent** | what you type into | Pi *(default)*, OpenCode, Claude Code |
 | **Models** | weights on disk, per engine | catalogs in `ModelLists/<Engine>/<RAM>_GB_Ram.json` |
-| **Monitoring** | observability, optional | macmon, Anubis OSS, LiteLLM proxy |
+| **Monitoring** | observability, optional | macOS: macmon, Anubis OSS, LiteLLM · Debian: nvtop, btop, LiteLLM |
 
 Layers are independent: any engine can be installed without an agent, any agent
 without models. The install wizard stops only when **no engine at all** is
@@ -45,20 +45,27 @@ An impossible pairing is never offered — not hidden, but named with the reason
 | MLX-LM | 8081 | HF repo, quant in the name | 4bit / 6bit / 8bit |
 
 Ollama's registry has no mid quants and its direct HuggingFace pulls fail, so
-llama.cpp and MLX-LM are the **only** routes to Q5_K_M / Q6_K / 6bit.
+llama.cpp and MLX-LM are the **only** routes to Q5_K_M / Q6_K / 6bit — and on
+Debian, where MLX cannot run, llama.cpp is the only one. Which layer members
+exist on which platform is tabulated in [PlatformNotes.md](PlatformNotes.md).
 
 ## Naming contract
 
 Every user-facing function is `aistack`-prefixed, so typing `aistack` at the
 shell reveals the whole toolkit. Scripts keep plain names.
 
-| Family | Purpose | Count |
-|---|---|---|
-| `aistackInstall*` | install one layer member | 18 |
-| `aistackUninstall*` | remove one layer member | 19 |
-| `aistackLaunchInference*` | serve a model, attach an agent | 14 |
-| `aistackModelTest*` | verify one engine + model | 15 |
-| `aistackTestAllAiModels`, `aistackNoRole`, `aistackHelp` | whole-script entry points | 3 |
+| Family | Purpose | macOS | Debian |
+|---|---|---|---|
+| `aistackInstall*` | install one layer member | 18 | 17 |
+| `aistackUninstall*` | remove one layer member | 19 | 18 |
+| `aistackLaunchInference*` | serve a model, attach an agent | 14 | 14 |
+| `aistackModelTest*` | verify one engine + model | 15 | 15 |
+| `aistackTestAllAiModels`, `aistackNoRole`, `aistackHelp` | whole-script entry points | 3 | 3 |
+| | **total** | **69** | **67** |
+
+The counts differ only because install and uninstall track their platform's
+layer members. `aistackHelp` prints the live list — prefer it to any number
+written down here.
 
 **Install and uninstall mirror each other function for function.** The one
 exception is `aistackUninstallOllamaData` (`~/.ollama`), which has no install
@@ -114,13 +121,21 @@ Root `*.sh` are thin wrappers: they source `common.sh`, detect the OS, and exec
 the real implementation from that OS's folder.
 
 ```
-MacOs/     complete
-Debian/    awaiting a port — wrappers already dispatch to it
+MacOs/     Apple Silicon macOS
+Debian/    Debian/Ubuntu
 other      refused with a clear message, never half-run
 ```
 
-Monitoring is explicitly macOS-specific; a Debian port will want different
-tools. Always invoke the root wrappers so the same commands work on both.
+Both folders implement this whole specification. What differs between them is
+never the contract, only the primitives — which measurement command, which
+package manager — and every difference is recorded in
+[PlatformNotes.md](PlatformNotes.md). Always invoke the root wrappers so the
+same commands work on both.
+
+A layer member that cannot exist on a platform is **absent there, not stubbed**
+— but the place you would look for it explains why. Asking the Debian launcher
+for `MLX-LM` gets "Apple Silicon only, use Llama.cpp for the same quality band",
+not "unknown engine".
 
 ## Model catalogs are data
 
@@ -148,20 +163,26 @@ Two deliberate refusals, both load-bearing:
 
 ## Environment knobs
 
-| Variable | Effect |
-|---|---|
-| `AI_STACK_HOME` | repo location (written into the rc) |
-| `MODEL_LIST_ENGINE` | which catalog folder to read |
-| `LLAMACPP_MODEL_DIR` | GGUF location (default `~/Models/llama.cpp`) |
-| `OLLAMA_CTX` / `FREE_MIN_MB` | context floor; app-closing threshold |
-| `PROMPT` | test prompt, suppresses the prompt question |
+| Variable | Effect | Where |
+|---|---|---|
+| `AI_STACK_HOME` | repo location (written into the rc) | both |
+| `MODEL_LIST_ENGINE` | which catalog folder to read | both |
+| `LLAMACPP_MODEL_DIR` | GGUF location (default `~/Models/llama.cpp`) | both |
+| `OLLAMA_CTX` / `FREE_MIN_MB` | context floor; process-closing threshold | both |
+| `PROMPT` | test prompt, suppresses the prompt question | both |
+| `RAM_RESERVE_GB` | RAM held back from the model budget (default 5) — the Linux counterpart of raising `iogpu.wired_limit_mb` | Debian |
+| `LLAMACPP_PREFIX` / `LLAMACPP_BINDIR` | where the engine is unpacked and linked (default `~/.local/opt/llama.cpp`, `~/.local/bin`) | Debian |
+| `LLAMACPP_NGL` / `LLAMACPP_THREADS` | override the backend-derived `-ngl` / `-t` passed to llama-server | Debian |
+| `OLLAMA_MODELS` | which of Linux's two model stores to use | Debian |
 
-Per-user choices persist in `~/.launchInference.conf` and become the next run's
-defaults.
+Per-user choices persist in `~/.aistackLaunchInference.conf` and become the next
+run's defaults — the same file and keys on both platforms.
 
 ## Platform traps
 
-Hard-won, and cheap to re-break:
+Hard-won, and cheap to re-break. These are the macOS-side traps; the Linux ones
+(and which of these apply to both) are in
+[PlatformNotes.md](PlatformNotes.md#platform-traps).
 
 - **Ollama runs its own `llama-server` subprocess.** Match ours by port; killing
   by name breaks Ollama's runner and poisons its Metal state.

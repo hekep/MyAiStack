@@ -86,13 +86,40 @@ installed, how to download). The menu:
 
 Per-engine download behavior:
 
-- **llama.cpp** — resolves the real GGUF filename from the repo tree (uploaders
-  name files differently), then `curl -L -C -`: **resumable**, which is exactly
-  what the Ollama HF path could not do.
+- **llama.cpp** — resolves the real GGUF filename **and its size** from the repo
+  tree (uploaders name files differently), then `curl -L -C -`: **resumable**,
+  which is exactly what the Ollama HF path could not do. The bytes arrive in
+  `<name>.gguf.part` and are renamed to `<name>.gguf` only once the size matches
+  what HuggingFace reported — so an interrupted download can never masquerade as
+  an installed model. See [Completed downloads are named
+  differently](#completed-downloads-are-named-differently).
 - **MLX-LM** — `huggingface_hub.snapshot_download` via
   `uv run --with huggingface-hub`; resumes from fetched shards.
 - **Ollama** — `ollama pull` with 3 retries on transient errors, real error
   reporting, and resume-aware cleanup of orphaned blobs.
+
+## Completed downloads are named differently
+
+A download in progress used to be written straight to its final
+`org__repo@QUANT.gguf` name. That name is what every lister in the toolkit
+globs for, so a half-finished 30 GB pull appeared as an installed model: it was
+listed by `llamacppListInstalled`, reported 0 GB by `engineModelSizeGb`, was
+hidden from the download menu as "already present", offered by the launcher,
+and then failed to load.
+
+So the bytes now land in `<name>.gguf.part`, and the file is renamed to
+`<name>.gguf` only when it is complete — verified against the byte count
+HuggingFace reports for the file (`.lfs.size` in the tree API), not merely
+because curl exited 0. Consequences:
+
+- `*.gguf` still means **complete**, so no lister needed changing.
+- An interrupted model stays in the download menu, and re-selecting it resumes
+  from the `.part` file exactly as before.
+- `aistackInstallLlamacppModels` lists any interrupted downloads with their size
+  before showing the menu, because a `.part` holds real disk and appears
+  nowhere else.
+- A short `.gguf` left behind by an older version is detected on the next pull,
+  renamed to `.part`, and resumed rather than being ignored or restarted.
 
 ## Why it is necessary
 

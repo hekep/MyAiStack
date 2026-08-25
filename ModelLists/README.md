@@ -16,6 +16,15 @@ mechanism — the three are **not** interchangeable: Ollama uses registry tags
 (`qwen3.6:35b-a3b`), llama.cpp uses `hf-repo:QUANT`, MLX uses a HuggingFace
 repo whose name embeds the quantization.
 
+**These catalogs are shared by both platforms.** A GGUF is a GGUF and an Ollama
+tag is an Ollama tag, so `Ollama/` and `Llama.cpp/` are read by the macOS and
+the Debian installers alike. `MLX-LM/` has no Debian consumer: MLX runs on
+Apple Silicon only. One caveat when reading the `notes` fields — several
+mention `iogpu.wired_limit_mb`, which is the macOS memory lever; the Debian
+equivalent is `RAM_RESERVE_GB`, and the filtering arithmetic
+(`size_gb * 1.3 + 2`) is identical on both. See
+[Docs/PlatformNotes.md](../Docs/PlatformNotes.md#the-memory-model--the-deepest-difference).
+
 ## Which file gets loaded
 
 `loadModelCatalog` (in `<OsFolder>/install.sh`) picks the file for the
