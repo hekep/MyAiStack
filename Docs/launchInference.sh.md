@@ -81,6 +81,14 @@ Each launcher refuses early rather than half-working:
    `aistackLaunchInferenceStart`, so a launcher called on its own derives the endpoint
    and verifies it instead of writing an empty URL into the agent's config.
 
+## Requested vs served context
+
+Engines clamp silently: a model trained for 32K accepts `-c 524288`, allocates
+KV cache for the request, and serves 32K. The launch summary therefore reports
+what is **actually** served and says so when it is less than you asked for,
+including that relaunching lower frees the wasted memory. Only Ollama exposes
+its ceiling in advance (`/api/show`), which the context menu already uses.
+
 ## The context estimate
 
 KV cache is estimated as `ctxK × model_GB / 200` — calibrated against a 30B-class

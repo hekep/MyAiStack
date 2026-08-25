@@ -176,6 +176,10 @@ Hard-won, and cheap to re-break:
 - **bash expands every `local` argument before assigning any**, so
   `local a="$1" b="${a%:*}"` silently leaves `b` empty — or picks up the
   caller's variable, which is worse.
+- **Engines clamp context silently.** A model trained for 32K accepts `-c 524288`
+  and serves 32K, having allocated KV cache for the request. Only Ollama can be
+  asked its ceiling in advance (`/api/show`), so the launcher reports what is
+  actually served and flags the gap.
 - **Two big models resident at once will take the machine down.**
 - **macOS local Time Machine snapshots pin freed disk**, so cleanup can look
   ineffective until they are deleted.

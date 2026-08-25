@@ -903,6 +903,32 @@ aistackLaunchInferencePrerequisites() {
     ok "Fits: ~${need} GB of ${gpu_gb} GB."
 }
 
+# The context the engine is ACTUALLY serving, which can be lower than asked for.
+# Args: <engine> <host>. Prints a number, or 0 when the engine cannot report it.
+# Engines clamp silently to the model's trained maximum, so "what I requested"
+# and "what I got" are different questions.
+_servedContext() {
+    local engine="${1:?}" host="${2:?}" port
+    port=$(engine_port "$engine")
+    case "$engine" in
+        Ollama)
+            curl -sf --max-time 8 "http://${host}:${port}/api/ps" 2>/dev/null | python3 -c '
+import json,sys
+try:
+    m=json.load(sys.stdin).get("models",[])
+    print(m[0].get("context_length",0) if m else 0)
+except Exception: print(0)' 2>/dev/null ;;
+        Llama.cpp)
+            curl -sf --max-time 8 "http://${host}:${port}/props" 2>/dev/null | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    print(d.get("default_generation_settings",{}).get("n_ctx", d.get("n_ctx",0)) or 0)
+except Exception: print(0)' 2>/dev/null ;;
+        *) echo 0 ;;
+    esac
+}
+
 # ---------- 7. start the engine ----------------------------------------------
 # Start the engine on the chosen model, context and address.
 # Args: <engine> <model> <context> <bind>. Offers to restart a server already
@@ -988,7 +1014,16 @@ aistackLaunchInferenceStart() {
     echo "${BOLD}=================== Running ===================${RESET}" >&2
     ok "Engine:   ${engine}"
     ok "Model:    ${model}"
-    ok "Context:  $(( ctx / 1024 ))K tokens"
+    local served
+    served=$(_servedContext "$engine" "$bind")
+    if [ "${served:-0}" -gt 0 ] && [ "$served" -lt "$ctx" ]; then
+        warn "Context:  $(( served / 1024 ))K tokens — you asked for $(( ctx / 1024 ))K, but"
+        warn "          ${engine} clamped it to what this model was trained for."
+        warn "          The extra KV cache was allocated for nothing; relaunching at"
+        warn "          $(( served / 1024 ))K frees that memory."
+    else
+        ok "Context:  $(( ctx / 1024 ))K tokens"
+    fi
     ok "Endpoint: ${LAUNCH_ENDPOINT}"
     ok "Memory:   ${mem} GB    Processor: ${cpu} %"
 }
