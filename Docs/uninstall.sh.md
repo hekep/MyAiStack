@@ -20,9 +20,19 @@ it refuses even when called directly with models present.
 
 ## How it works — one function per layer
 
-Layer order: **models** (the gate) → **monitoring** (observational, nothing
-depends on it) → **coding agents** (they sit above the engines) → **engines** →
-**their data** → **foundations**.
+Layer order mirrors the installer in reverse: **sanity** → **disk report** →
+**models, one step per engine** (the gate) → **monitoring** → **coding agents**
+→ **engines** → **their data** → **foundations**.
+
+Every `aistackInstall*` step has an `aistackUninstall*` counterpart of the same
+name, so the two families are symmetrical. Two asymmetries are deliberate:
+
+- `aistackUninstallDiskGate` **reports** rather than gates. The installer blocks
+  below a disk minimum; removing things can only free space, so the inverse is a
+  breakdown of what each layer is holding, to inform what is worth removing.
+- `aistackUninstallOllamaData` has no install counterpart — nothing explicitly
+  *installs* `~/.ollama`; it accumulates. It is the deep clean of the blob
+  store, kept separate because it is the one unrecoverable step.
 
 | Function | Layer | Behavior |
 |---|---|---|

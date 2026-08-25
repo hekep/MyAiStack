@@ -17,12 +17,12 @@
 #   aistackUninstallOpenCodeCodingAgent  OpenCode
 #   aistackUninstallPiCodingAgent        Pi
 #   --- engines and foundations ---
-#   aistackUninstallMlx                  mlx-lm / MLX-LM engine (+ HF cache)
+#   aistackUninstallMlxmlEngine                  mlx-lm / MLX-LM engine (+ HF cache)
 #   aistackUninstallOllamaEngine         Ollama itself (service, formula, .app)
 #   aistackUninstallOllamaData           ~/.ollama — model blobs + registry keys
 #   aistackUninstallUv                   uv (foundation of mlx-lm)
 #   aistackUninstallHomebrew             reports only — never removed
-#   aistackUninstallStatus               what is left standing
+#   aistackUninstallVerification               what is left standing
 #   aistackUninstall                     wrapper — runs all of the above in order
 #
 # THE GATE: while any Ollama model is still installed, Ollama and everything
@@ -122,6 +122,37 @@ ollama_server_up() { curl -sf http://localhost:11434/api/version >/dev/null 2>&1
 # keeps the dependency rule true even when a function is called directly.
 ollama_model_count() { ollama list 2>/dev/null | awk 'NR>1' | grep -c . ; }
 
+# Mirror of aistackInstallSanity: confirm this is a machine the MacOs
+# implementations apply to before touching anything. Args: none.
+aistackUninstallSanity() {
+    info "aistackUninstallSanity — platform check"
+    if [ "$(uname -s)" != "Darwin" ]; then
+        fail "These are the macOS implementations; this is $(uname -s)."
+        return 1
+    fi
+    ok "macOS $(sw_vers -productVersion 2>/dev/null) — proceeding."
+}
+
+# Mirror of aistackInstallDiskGate. The installer BLOCKS below a disk minimum;
+# the inverse is not a gate — removing things can only free space — so this
+# reports what each layer is currently holding, to inform what to remove.
+aistackUninstallDiskGate() {
+    info "aistackUninstallDiskGate — what the stack is holding (nothing is blocked)"
+    local total=0 sz
+    _report() {  # <label> <path-or-empty> <fallback-size>
+        [ -n "$2" ] && [ -e "$2" ] || { [ -n "$3" ] || return 0; }
+        sz="${3:-$(sizeof "$2")}"
+        printf "    %-34s %s\n" "$1" "$sz"
+    }
+    [ -d "$HOME/.ollama" ]        && _report "Ollama models (~/.ollama)"      "$HOME/.ollama"
+    [ -d "${LLAMACPP_MODEL_DIR:-$HOME/Models/llama.cpp}" ] && \
+        _report "llama.cpp GGUFs" "${LLAMACPP_MODEL_DIR:-$HOME/Models/llama.cpp}"
+    [ -d "${HF_HOME:-$HOME/.cache/huggingface}" ] && \
+        _report "HuggingFace cache (MLX etc.)" "${HF_HOME:-$HOME/.cache/huggingface}"
+    unset -f _report
+    ok "Free disk now: $(free_gb) GB — removals below will add to it."
+}
+
 # ---------- layer: Ollama models — the gate ----------------------------------
 # Layer 1 and the GATE: remove models one at a time from a numbered menu.
 # Mirrors the installer's download menu — pick a number, see the freed GB, the
@@ -194,8 +225,8 @@ aistackUninstallOllamaModels() {
 # Remove the MLX-LM engine (the mlx-lm uv tool).
 # Then offers the HuggingFace model cache separately and defaults to keeping it:
 # it is pure re-downloadable cache, but often the largest item on the disk.
-aistackUninstallMlx() {
-    info "aistackUninstallMlx — mlx-lm and its model cache"
+aistackUninstallMlxmlEngine() {
+    info "aistackUninstallMlxmlEngine — the MLX-LM engine (mlx-lm)"
     if ! command -v uv >/dev/null 2>&1 || ! uv tool list 2>/dev/null | grep -q '^mlx-lm'; then
         ok "mlx-lm not installed — nothing to do."
         return 0
@@ -220,6 +251,126 @@ aistackUninstallMlx() {
             ok "Keeping the HuggingFace cache."
         fi
     fi
+}
+
+# ---------- layer: models, one step per engine (mirrors the installer) -------
+
+# GGUF models on disk for llama.cpp, as engine tags. Args: none.
+llamacppListInstalled() {
+    local dir="${LLAMACPP_MODEL_DIR:-$HOME/Models/llama.cpp}" f b
+    [ -d "$dir" ] || return 0
+    for f in "$dir"/*.gguf; do
+        [ -e "$f" ] || continue
+        b=$(basename "$f" .gguf)
+        printf '%s\n' "$(printf '%s' "$b" | sed 's|@|:|; s|__|/|g')"
+    done
+}
+
+# MLX models in the HuggingFace cache, as repo ids. Args: none.
+mlxmlListInstalled() {
+    local cache="${HF_HOME:-$HOME/.cache/huggingface}/hub" d b
+    [ -d "$cache" ] || return 0
+    for d in "$cache"/models--*; do
+        [ -d "$d" ] || continue
+        b=$(basename "$d")
+        printf '%s\n' "$(printf '%s' "${b#models--}" | sed 's|--|/|')"
+    done
+}
+
+# Shared numbered menu for removing models of one engine — the mirror of the
+# installer's download menu. Args: <engine> <list-fn> <path-fn>.
+# Returns 0 when no models remain, 1 when the user stops with some left.
+_aistackModelRemoveMenu() {
+    local engine="$1" list_fn="$2" path_fn="$3" models i names sel m target before
+    while true; do
+        models=$("$list_fn")
+        if [ -z "$models" ]; then
+            ok "No ${engine} models remain."
+            return 0
+        fi
+        echo
+        echo "${BOLD}${engine} models (free disk: $(free_gb) GB):${RESET}"
+        i=1; names=()
+        while IFS= read -r m; do
+            [ -z "$m" ] && continue
+            printf "  %2d) %-52s %s\n" "$i" "$m" "$(sizeof "$("$path_fn" "$m")")"
+            names+=("$m"); i=$((i+1))
+        done <<< "$models"
+        echo "   N) Keep the rest — stop here"
+        printf "\n%sRemove which ${engine} model? [1-%d / N]:%s " "${BOLD}" "${#names[@]}" "${RESET}"
+        read -r sel </dev/tty || sel="N"
+        case "$sel" in
+            [Nn]) return 1 ;;
+            *[!0-9]*|"") echo "Enter a number or N."; continue ;;
+        esac
+        if [ "$sel" -lt 1 ] || [ "$sel" -gt "${#names[@]}" ]; then echo "Out of range."; continue; fi
+        m="${names[$((sel-1))]}"
+        target=$("$path_fn" "$m")
+        before=$(free_gb)
+        if rm -rf "$target"; then
+            ok "Removed ${m} — freed $(( $(free_gb) - before )) GB."
+        else
+            fail "Could not remove ${target}."
+        fi
+    done
+}
+
+# Where one llama.cpp tag lives on disk. Args: <tag>.
+llamacppPathFor() {
+    [ $# -ge 1 ] || { aiStackUsage "llamacppPathFor <tag>" "example : llamacppPathFor org/repo-GGUF:Q8_0"; return 2; }
+    echo "${LLAMACPP_MODEL_DIR:-$HOME/Models/llama.cpp}/$(printf '%s' "$1" | sed 's|/|__|g; s|:|@|').gguf"
+}
+
+# Where one MLX repo lives in the HuggingFace cache. Args: <repo>.
+mlxmlPathFor() {
+    [ $# -ge 1 ] || { aiStackUsage "mlxmlPathFor <hf-repo>" "example : mlxmlPathFor mlx-community/Model-4bit"; return 2; }
+    echo "${HF_HOME:-$HOME/.cache/huggingface}/hub/models--$(printf '%s' "$1" | sed 's|/|--|')"
+}
+
+# Remove llama.cpp GGUF models — mirror of aistackInstallLlamacppModels.
+# Returns 0 when none remain, so the engine layer below may proceed.
+aistackUninstallLlamacppModels() {
+    info "aistackUninstallLlamacppModels — GGUF files in ${LLAMACPP_MODEL_DIR:-$HOME/Models/llama.cpp}"
+    if ! command -v llama-server >/dev/null 2>&1 && [ -z "$(llamacppListInstalled)" ]; then
+        ok "No llama.cpp models — nothing to do."
+        return 0
+    fi
+    _aistackModelRemoveMenu "Llama.cpp" llamacppListInstalled llamacppPathFor
+}
+
+# Remove MLX models from the HuggingFace cache — mirror of
+# aistackInstallMlxmlModels. Note the cache is shared with anything else using
+# HuggingFace, so only the model directories chosen here are touched.
+aistackUninstallMlxmlModels() {
+    info "aistackUninstallMlxmlModels — MLX models in the HuggingFace cache"
+    if [ -z "$(mlxmlListInstalled)" ]; then
+        ok "No MLX models in the cache — nothing to do."
+        return 0
+    fi
+    _aistackModelRemoveMenu "MLX-LM" mlxmlListInstalled mlxmlPathFor
+}
+
+# Remove the llama.cpp engine — mirror of aistackInstallLlamacppEngine.
+# Refuses while GGUFs remain, the same rule the Ollama engine layer follows.
+aistackUninstallLlamacppEngine() {
+    info "aistackUninstallLlamacppEngine — llama.cpp"
+    if ! command -v llama-server >/dev/null 2>&1 && ! command -v llama-cli >/dev/null 2>&1; then
+        ok "llama.cpp not installed — nothing to do."
+        return 0
+    fi
+    local n
+    n=$(llamacppListInstalled | grep -c . || true)
+    if [ "${n:-0}" -gt 0 ]; then
+        fail "${n} GGUF model(s) still on disk — refusing to remove llama.cpp."
+        fail "Run aistackUninstallLlamacppModels first."
+        return 1
+    fi
+    if ! ask_def "Uninstall llama.cpp?" "y"; then
+        ok "Keeping llama.cpp."
+        return 0
+    fi
+    pkill -f "llama-server .*--port 8080" 2>/dev/null
+    brew uninstall llama.cpp && ok "llama.cpp removed." || fail "brew uninstall failed."
 }
 
 # ---------- layer: monitoring -------------------------------------------------
@@ -516,7 +667,7 @@ aistackUninstallHomebrew() {
 # Print what is still standing: engines, agents, models, uv, brew, free disk.
 # Also printed when the model gate stops the run, so a cancelled uninstall still
 # ends with an accurate picture.
-aistackUninstallStatus() {
+aistackUninstallVerification() {
     echo
     echo "${BOLD}================= What is left =================${RESET}"
     command -v ollama >/dev/null 2>&1 && warn "Ollama:  still installed ($(ollama --version 2>/dev/null))" \
@@ -545,15 +696,22 @@ aistackUninstall() {
     echo "${BOLD} Local AI coding stack — uninstaller${RESET}"
     echo "${BOLD} Order: most dependent layer first -> foundations last${RESET}"
     echo "${BOLD}=============================================================${RESET}"
+    aistackUninstallSanity || return 1
+    aistackUninstallDiskGate
 
-    # THE GATE — while models exist, nothing below them may be removed.
-    if ! aistackUninstallOllamaModels; then
+    # THE GATE — every engine's models must be gone before anything they
+    # depend on may be removed. One step per engine, mirroring the installer.
+    local left=0
+    aistackUninstallLlamacppModels || left=1
+    aistackUninstallMlxmlModels    || left=1
+    aistackUninstallOllamaModels   || left=1
+    if [ "$left" = "1" ]; then
         echo
-        warn "${BOLD}Uninstallation stopped: Ollama models are still installed.${RESET}"
-        warn "Ollama, mlx-lm, the Claude CLI and uv are all kept — models depend on them."
-        warn "Remove every model to continue, or run a single layer function directly:"
-        warn "  source uninstall.sh && aistackUninstallMlx"
-        aistackUninstallStatus
+        warn "${BOLD}Uninstallation stopped: models are still installed.${RESET}"
+        warn "Engines, agents, monitoring and uv are all kept — models depend on them."
+        warn "Remove every model to continue, or run a single layer directly:"
+        warn "  source uninstall.sh && aistackUninstallMacmonMonitoring"
+        aistackUninstallVerification
         exit 0
     fi
 
@@ -567,12 +725,16 @@ aistackUninstall() {
     aistackUninstallOpenCodeCodingAgent
     aistackUninstallPiCodingAgent
 
-    aistackUninstallMlx
+    # then the engines, reverse of the order the installer offers them
     aistackUninstallOllamaEngine
+    aistackUninstallMlxmlEngine
+    aistackUninstallLlamacppEngine
+
+    # engine data, then the foundations
     aistackUninstallOllamaData
     aistackUninstallUv
     aistackUninstallHomebrew
-    aistackUninstallStatus
+    aistackUninstallVerification
 }
 
 # ---------- run pipeline when executed (not sourced) -------------------------
