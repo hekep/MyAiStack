@@ -19,7 +19,7 @@ aistackLaunchInferenceKillPrevious     # free the GPU without a full launch
 aiModelTest Ollama qwen3.6:35b-a3b
 uninstallAiStackPiCodingAgent
 testAllAiModels
-noRole Docker
+aistackNoRole Docker
 ```
 
 55 functions at present: `aistackInstall*`, `uninstallAiStack*`,

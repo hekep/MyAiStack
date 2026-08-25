@@ -122,7 +122,7 @@ fi
 # Whole-script entry points, so the shell offers the same commands as the repo.
 # These run the root dispatch wrappers, which pick the right OS folder.
 testAllAiModels() { "${AI_STACK_HOME}/testAllAiModels.sh" "$@"; }
-noRole()          { "${AI_STACK_HOME}/noRole.sh" "$@"; }
+aistackNoRole()          { "${AI_STACK_HOME}/noRole.sh" "$@"; }
 
 # List everything this integration provides, grouped by layer.
 # Run aiStackHelp after a shell restart to confirm the wiring took effect and
@@ -144,7 +144,7 @@ aiStackHelp() {
     done
     echo
     echo "  whole scripts"
-    echo "      testAllAiModels    noRole <Role>"
+    echo "      testAllAiModels    aistackNoRole <Role>"
     echo
     echo "  full wizards:  ${AI_STACK_HOME}/install.sh   uninstall.sh   launchInference.sh"
 }
