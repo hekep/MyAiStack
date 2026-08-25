@@ -35,8 +35,9 @@ Nothing runs without asking, and nothing is installed silently.
 | `./noRole.sh <Role>` | Purge a whole product and its leftovers (`Docker`, `Codex`) |
 | `./installAliases.sh` | Make all 55 step functions available in every shell |
 
-Full write-ups — what each does, how it works, and **why** — are in
-[Docs/](Docs/README.md).
+The contract behind all of it — layers, naming, invariants — is in
+[Docs/SPECIFICATION.md](Docs/SPECIFICATION.md). Full write-ups of each script,
+what it does, how it works and **why**, are in [Docs/](Docs/README.md).
 
 ## Calling individual steps
 

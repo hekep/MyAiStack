@@ -22,6 +22,9 @@ folder lacks that script). Always invoke the root wrappers — `./install.sh`,
 not `MacOs/install.sh` — so the same commands will work unchanged on the
 Debian box.
 
+**Start here:** [SPECIFICATION.md](SPECIFICATION.md) — what the project is, the
+four layers, the naming contract and the invariants every change must keep.
+
 | Script | Doc | One-liner |
 |---|---|---|
 | [install.sh](../install.sh) | [install.sh.md](install.sh.md) | Multi-engine, re-runnable installer (`aistackInstall*` + `aistackInstall` wrapper): disk gate → **three engines** (llama.cpp default-yes, MLX-LM and Ollama optional; wizard cancels if none) → **coding agents** (Pi default-yes, OpenCode/Claude optional) → a RAM-aware model menu **per installed engine**, each from its own catalog → verification. |
