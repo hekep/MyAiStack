@@ -115,3 +115,11 @@ individual step functions take arguments instead and need none.
   a tok/s figure from a Mac and from a Debian box are directly comparable.
 - **Safe to re-run** — every step detects what is already done, so each script
   doubles as its own status check.
+
+## License
+
+[MIT](LICENSE) — do what you like, keep the copyright notice, no warranty.
+
+The models, engines and agents this installs carry **their own licences**,
+which are not MIT: check each one before commercial use. Anubis OSS is
+GPL-3.0, and model weights range from Apache-2.0 to bespoke community terms.
