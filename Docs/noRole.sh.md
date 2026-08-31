@@ -46,10 +46,15 @@ entry point instead of one command per role:
 
 ## The roles themselves
 
-| Role | Doc | What it removes |
-|---|---|---|
-| `Docker` | [noDockerRole.sh.md](noDockerRole.sh.md) | Docker Desktop across all five places it hides: app, VM disk, root daemons, symlinks, library traces, keychain — protecting `~/MyDocker*` |
-| `Codex` | [noCodexRole.sh.md](noCodexRole.sh.md) | OpenAI Codex and its leftovers, while guaranteeing ChatGPT survives |
+| Role | What it removes | macOS | Debian |
+|---|---|---|---|
+| `Docker` | Docker everywhere it hides — engine data, VM disk, daemons, symlinks, traces, credentials — always protecting `~/MyDocker*` | [noDockerRole.sh.md](../MacOsDocs/noDockerRole.sh.md) | [noDockerRole.sh.md](../DebianDocs/noDockerRole.sh.md) |
+| `Codex` | OpenAI Codex and its leftovers | [noCodexRole.sh.md](../MacOsDocs/noCodexRole.sh.md) | [noCodexRole.sh.md](../DebianDocs/noCodexRole.sh.md) |
+
+The two implementations differ in scope, not intent: macOS must disentangle
+Docker **Desktop** and the keychain, and must guarantee the ChatGPT app survives
+the Codex purge; Debian has neither problem but must handle the apt repository,
+systemd units and the `docker` group.
 
 Each asks before every step, in raw→surgical order, and reports the disk space
 actually recovered.

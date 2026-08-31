@@ -168,7 +168,7 @@ Per-engine download behavior:
   The bytes arrive in `<name>.gguf.part` and are renamed to `<name>.gguf` only
   once the size matches what HuggingFace reported, so an interrupted download
   can never masquerade as an installed model. Identical to the macOS side —
-  see [Docs/install.sh.md](../Docs/install.sh.md#completed-downloads-are-named-differently)
+  see [MacOsDocs/install.sh.md](../MacOsDocs/install.sh.md#completed-downloads-are-named-differently)
   for the full reasoning.
 - **Ollama** — `ollama pull` with 3 retries on transient errors, real error
   reporting, and resume-aware cleanup of orphaned blobs. The orphan cleanup

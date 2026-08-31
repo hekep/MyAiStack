@@ -40,7 +40,7 @@ different engines are directly comparable.
 
 ## Calling a step directly
 
-Every step is individually callable (see [installAliases.sh.md](installAliases.sh.md)). A step invoked without its
+Every step is individually callable (see [installAliases.sh.md](../Docs/installAliases.sh.md)). A step invoked without its
 arguments prints usage rather than a bash error, and the hints are resolved
 live — the engine line names what this machine actually has:
 

@@ -41,10 +41,12 @@ is absent rather than stubbed, and anything that could ask for it says so.
 | `./installAliases.sh` | Make every step function available in every shell |
 
 The contract behind all of it — layers, naming, invariants — is in
-[Docs/SPECIFICATION.md](Docs/SPECIFICATION.md). Full write-ups of each script,
-what it does, how it works and **why**, are in [Docs/](Docs/README.md) (macOS)
-and [DebianDocs/](DebianDocs/README.md) (Debian). What differs between the two
-platforms, and why, is in [Docs/PlatformNotes.md](Docs/PlatformNotes.md).
+[Docs/SPECIFICATION.md](Docs/SPECIFICATION.md), and every choice the stack
+offers is mapped in [Docs/DecisionTree.md](Docs/DecisionTree.md). Full write-ups
+of each script, what it does, how it works and **why**, are in
+[MacOsDocs/](MacOsDocs/README.md) (macOS) and [DebianDocs/](DebianDocs/README.md)
+(Debian). What differs between the two platforms, and why, is in
+[Docs/PlatformNotes.md](Docs/PlatformNotes.md).
 
 ## Calling individual steps
 
@@ -70,7 +72,8 @@ common.sh                            OS detection + dispatch
 MacOs/                               the Apple Silicon implementations
 Debian/                              the Debian/Ubuntu implementations
 ModelLists/<Engine>/<RAM>_GB_Ram.json  model catalogs as data (shared)
-Docs/                                one document per macOS script, + the spec
+Docs/                                the generic docs: spec, decision tree, deltas
+MacOsDocs/                           one document per macOS script
 DebianDocs/                          one document per Debian script
 ```
 

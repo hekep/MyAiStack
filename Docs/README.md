@@ -1,63 +1,78 @@
-# Docs — MyAiStack scripts
+# Docs — MyAiStack
 
-Documentation for the shell scripts in this repo. Each doc covers **what the
-script does, how it works, and why it is necessary**.
+The **generic** documentation: what the project is, what it guarantees, and how
+its pieces fit together on every platform it supports. Anything specific to one
+operating system lives in that platform's folder instead.
+
+## Where to start
+
+| Document | What it answers |
+|---|---|
+| [SPECIFICATION.md](SPECIFICATION.md) | **The contract.** What the project is, the four layers, the naming rule, and the nine invariants every change must keep. |
+| [DecisionTree.md](DecisionTree.md) | **The shape.** Every choice the stack offers, and what each choice determines — catalog, model ID format, quant ladder, download location. |
+| [PlatformNotes.md](PlatformNotes.md) | **The delta.** What macOS and Debian share, where they diverge, and why. Most apparent inconsistencies between the two implementations are platform facts recorded here; the rest are traps somebody already fell into. |
+
+## The platform folders
+
+Each implementation is documented one file per script, in its own folder:
+
+- [MacOsDocs/](../MacOsDocs/README.md) — the Apple Silicon macOS implementations
+  in [`MacOs/`](../MacOs/)
+- [DebianDocs/](../DebianDocs/README.md) — the Debian/Ubuntu implementations in
+  [`Debian/`](../Debian/)
+
+Both folders have the same shape, and both implement the specification above.
+What differs is never the contract — only the primitives.
+
+## The shared scripts
+
+Two root scripts are genuinely platform-independent, so they are documented once,
+here, rather than twice:
+
+| Script | Doc | One-liner |
+|---|---|---|
+| [noRole.sh](../noRole.sh) | [noRole.sh.md](noRole.sh.md) | Unified purge dispatcher: **discovers** the `no<Role>Role.sh` scripts in whichever OS folder was detected. `./noRole.sh Docker` (case-insensitive) launches one directly; with no argument it offers each available role as a y/N question (default No). |
+| [installAliases.sh](../installAliases.sh) | [installAliases.sh.md](installAliases.sh.md) | Adds a marker-delimited block to your shell rc so every step function is callable from anywhere (`aistackHelp` lists them). Idempotent, backs up the rc, `--remove` undoes it. Runs each function in its own bash process, so helper names never leak into your shell. |
 
 ## Repo layout — OS dispatch
 
 The `*.sh` scripts in the repo root are thin **wrappers**: each one sources
 [common.sh](../common.sh), detects the host OS, and `exec`s the real
-implementation from the matching OS folder, forwarding all arguments:
+implementation from the matching OS folder, forwarding all arguments.
 
-- `MacOs/` — the Apple Silicon macOS implementations (everything documented
-  below lives here)
-- `Debian/` — the Debian/Ubuntu implementations, documented separately in
-  [DebianDocs/](../DebianDocs/README.md)
-- Unsupported systems (e.g. Fedora/RHEL-based Linux) exit with a clear
-  message instead of half-running.
+```
+./install.sh  →  common.sh: detectOsFolder  →  MacOs/install.sh
+                                            or  Debian/install.sh
+                                            or  refuse, with a clear message
+```
 
-`common.sh` holds the shared code: `detectOsFolder` (Darwin → MacOs;
-Linux with debian/ubuntu in `/etc/os-release` ID/ID_LIKE → Debian; anything
-else → refuse) and `os_exec` (dispatch, with a friendly error when an OS
-folder lacks that script). Always invoke the root wrappers — `./install.sh`,
-not `MacOs/install.sh` — so the same commands will work unchanged on the
-Debian box.
+`common.sh` holds the shared code: `detectOsFolder` (Darwin → `MacOs`; Linux
+with `debian` or `ubuntu` in `/etc/os-release`'s `ID`/`ID_LIKE` → `Debian`;
+anything else → refuse) and `os_exec` (dispatch, with a friendly error when an
+OS folder lacks that script).
 
-**Start here:** [SPECIFICATION.md](SPECIFICATION.md) — what the project is, the
-four layers, the naming contract and the invariants every change must keep.
-
-**Working across platforms:** [PlatformNotes.md](PlatformNotes.md) — what macOS
-and Debian share, where they diverge, and why. Most apparent inconsistencies
-between the two folders are platform facts recorded there; the rest are traps
-somebody already fell into.
-
-**The Debian side:** [DebianDocs/](../DebianDocs/README.md) — one document per
-Debian script, same shape as this folder.
-
-| Script | Doc | One-liner |
-|---|---|---|
-| [install.sh](../install.sh) | [install.sh.md](install.sh.md) | Multi-engine, re-runnable installer (`aistackInstall*` + `aistackInstall` wrapper): disk gate → **three engines** (llama.cpp default-yes, MLX-LM and Ollama optional; wizard cancels if none) → **coding agents** (Pi default-yes, OpenCode/Claude optional) → a RAM-aware model menu **per installed engine**, each from its own catalog → verification. |
-| [uninstall.sh](../uninstall.sh) | [uninstall.sh.md](uninstall.sh.md) | Function-per-layer remover (`aistackUninstall*` + `aistackUninstall` wrapper), mirror of the installer in reverse-dependency order: models (numbered menu, **gate**) → mlx-lm → Claude CLI → Ollama → `~/.ollama` (double-confirmed) → uv. Nothing below the models is removed while any model remains. Homebrew untouched. |
-| [noRole.sh](../noRole.sh) | [noRole.sh.md](noRole.sh.md) | Unified purge dispatcher: discovers the `no<Role>Role.sh` scripts in the OS folder. `./noRole.sh Docker` (case-insensitive) launches one directly; with no argument it offers each available role as a y/N question (default No). |
-| [MacOs/noDockerRole.sh](../MacOs/noDockerRole.sh) | [noDockerRole.sh.md](noDockerRole.sh.md) | "Reg cleaner" purge of Docker Desktop — app, 33 GB VM disk, root daemons, symlinks, traces, keychain — protecting `~/MyDocker*`. Reports GB gained per step. Run via `./noRole.sh Docker`. |
-| [MacOs/noCodexRole.sh](../MacOs/noCodexRole.sh) | [noCodexRole.sh.md](noCodexRole.sh.md) | Removes OpenAI Codex and ~2.2 GB of leftovers while guaranteeing ChatGPT survives; handles the two Codex/ChatGPT grey zones explicitly. Run via `./noRole.sh Codex`. |
-| [launchInference.sh](../launchInference.sh) | [launchInference.sh.md](launchInference.sh.md) | Runs a model: engine selector (asked when several are installed) → model → **context size menu (32K/64K/128K default/larger when it fits)** → network exposure (every engine) → free memory → fit check → start server → **coding agent** (compatibility-filtered: Pi/OpenCode any engine, Claude Ollama-only). |
-| [aiModelTest.sh](../aiModelTest.sh) | [aiModelTest.sh.md](aiModelTest.sh.md) | Tests one engine+model: **engine menu → model menu → prompt question**, then server → generation (tokens/sec) → Anthropic endpoint (Ollama only, SKIP elsewhere) → tool-calling (PASS/FLAKY/FAIL) → served context. Starts the right server for the chosen model. |
-| [installAliases.sh](../installAliases.sh) | [installAliases.sh.md](installAliases.sh.md) | Adds a marker-delimited block to your shell rc so every step function is callable from anywhere (`aistackHelp` lists them). Idempotent, backs up the rc, `--remove` undoes it. Runs each function in its own bash process, so helper names never leak into your shell. |
-| [testAllAiModels.sh](../testAllAiModels.sh) | [testAllAiModels.sh.md](testAllAiModels.sh.md) | Sweeps **every engine × every model it has**, one prompt for all, stopping each server between models so the next one gets clean memory. Ends with one table: engine, model, tokens, time, tok/s, tools, ctx, total. |
+Always invoke the root wrappers — `./install.sh`, not `MacOs/install.sh` — so
+the same commands work unchanged on every platform. Unsupported systems exit
+with a clear message instead of half-running.
 
 ## Shared design principles
 
 - **One question at a time** — every destructive or installing action is an
   individual y/n prompt; nothing happens silently.
+- **Never a question with one possible answer** — a single valid option is
+  announced and used, not asked about.
 - **Dependency order** — installers go foundation-first, removers go
   most-dependent-first; each step verifies what earlier steps established.
 - **Hard gates over warnings** — not enough disk or RAM blocks the flow
   (re-check loop / non-zero exit), it doesn't just print a caveat.
 - **Measured, not estimated** — disk gains come from `df` before/after, memory
-  from live `ps`/`vm_stat`, listening ports from `lsof`.
+  from live process and kernel counters, listening ports from `lsof`, tokens per
+  second from the engine's own usage figures.
 - **Protect the expensive and the personal** — model blobs, `~/MyDocker*`,
-  ChatGPT data and keychain logins are separated from the things being
-  removed, with keep-recommendations where re-acquiring is costly.
-- **Safe to re-run** — completed steps are detected and skipped, so every
-  script doubles as its own status checker.
+  agent configs and keychain logins are separated from the things being removed,
+  with keep-recommendations where re-acquiring is costly.
+- **Safe to re-run** — completed steps are detected and skipped, so every script
+  doubles as its own status checker.
+
+These are stated formally, with the reasoning, as the nine invariants in
+[SPECIFICATION.md](SPECIFICATION.md#invariants).

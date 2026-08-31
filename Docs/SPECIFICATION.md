@@ -23,6 +23,9 @@ Layers are independent: any engine can be installed without an agent, any agent
 without models. The install wizard stops only when **no engine at all** is
 present, because nothing below that point can mean anything.
 
+Every choice these layers offer, and what each one determines, is drawn out in
+[DecisionTree.md](DecisionTree.md).
+
 ### Engine / agent compatibility
 
 The single asymmetry in the design, and the reason compatibility is enforced

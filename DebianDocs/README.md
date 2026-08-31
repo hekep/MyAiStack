@@ -2,7 +2,8 @@
 
 Documentation for the scripts in [`Debian/`](../Debian/). Each doc covers **what
 the script does, how it works, and why it is necessary** — the same shape as
-[`Docs/`](../Docs/README.md), which documents the macOS side.
+[`MacOsDocs/`](../MacOsDocs/README.md), which documents the macOS side. The
+generic documentation both folders sit under is in [`Docs/`](../Docs/README.md).
 
 **If you only read two things:**
 
@@ -40,8 +41,8 @@ half-run.
 | [noDockerRole.sh](../Debian/noDockerRole.sh) | [noDockerRole.sh.md](noDockerRole.sh.md) | Eleven-step Docker purge: engine data, Desktop VM disk (**mount-aware**), apt packages, **the repository**, systemd units, user data, the `docker` group, credentials — protecting `~/MyDocker*`. Run via `./noRole.sh Docker`. |
 | [noCodexRole.sh](../Debian/noCodexRole.sh) | [noCodexRole.sh.md](noCodexRole.sh.md) | Removes the OpenAI Codex CLI and its leftovers. Shorter than the macOS version because Linux has no official ChatGPT desktop app to disentangle it from. Run via `./noRole.sh Codex`. |
 
-Two root scripts are shared rather than per-OS, and are documented once on the
-macOS side:
+Two root scripts are shared rather than per-OS, and are documented once in the
+generic folder:
 
 - [noRole.sh](../Docs/noRole.sh.md) — the purge dispatcher. It **discovers**
   `no*Role.sh` in the OS folder, so both Debian roles appeared automatically.
