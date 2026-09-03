@@ -137,6 +137,32 @@ elif [ -n "${ZSH_VERSION:-}" ] && [ -f "${AI_STACK_HOME}/completions.zsh" ]; the
     . "${AI_STACK_HOME}/completions.zsh"
 fi
 
+# aistackMcpBuild is wrapped a second time, overriding the generated wrapper
+# above. Building a connector is the moment its tools become completable, but
+# the function itself runs in a child bash process — and a child cannot change
+# its parent's completion state. So the offer has to be made here, in the shell
+# that would actually gain the completion.
+aistackMcpBuild() {
+    _aiStackRun "${AI_STACK_HOME}/mcp.sh" aistackMcpBuild "$@"
+    local _rc=$?
+    [ "$_rc" -eq 0 ] || return "$_rc"
+    [ -z "${AI_STACK_COMPLETION:-}" ] || return 0        # already live: nothing to ask
+    local _f="" _a
+    if [ -n "${ZSH_VERSION:-}" ];  then _f="${AI_STACK_HOME}/completions.zsh"; fi
+    if [ -n "${BASH_VERSION:-}" ]; then _f="${AI_STACK_HOME}/completions.bash"; fi
+    [ -n "$_f" ] && [ -f "$_f" ] || return 0             # nothing we could load
+    printf "\n\033[1mEnable tab completion for aistackMcpCall in this shell?\033[0m [Y/n] "
+    { read -r _a </dev/tty; } 2>/dev/null || { _a=""; echo; }
+    case "${_a:-y}" in
+        [Nn]|[Nn]o)
+            echo "   Skipped. Enable it later with:  source ${_f}" ;;
+        *)
+            . "$_f"
+            echo "   Tab completion on. Try:  aistackMcpCall <TAB>" ;;
+    esac
+    return 0
+}
+
 # List everything this integration provides, grouped by layer.
 # Run aistackHelp after a shell restart to confirm the wiring took effect and
 # to see the step names without opening the scripts.

@@ -67,3 +67,8 @@ _aistackMcpNameOnly() {
 compdef _aistackMcpComplete aistackMcpCall aistackMcpTools
 compdef _aistackMcpNameOnly aistackMcpLogin aistackMcpBuild aistackMcpRemove \
                             aistackMcpLogout aistackMcpRefresh aistackMcpEnable aistackMcpDisable
+
+# Tell the aistackMcp* functions that completion is live in this shell. They run
+# in their own bash process, which inherits exported variables — so this is how
+# aistackMcpBuild knows whether to suggest reloading the rc file.
+export AI_STACK_COMPLETION=zsh
