@@ -837,6 +837,27 @@ for line in sys.stdin:
           f"{len(r.get("tools_offered") or []):>2} tools  {last}{tag}")'
 }
 
+# Stop the proxy this toolkit started, if any. Args: none.
+# The mirror of StartProxy: declining the proxy has to actively remove one that
+# is already there, or the agent would be pointed at the engine while a stale
+# proxy kept running and logging nothing. A proxy on the port that is not ours
+# is left alone — it belongs to whoever started it.
+aistackLaunchInferenceStopProxy() {
+    local pids; pids=$(litellmOurPids | tr '\n' ' ')
+    if [ -z "$pids" ]; then
+        if litellm_up; then
+            warn "Something else is serving port ${LITELLM_PORT} — left running, it is not ours."
+        fi
+        return 0
+    fi
+    info "Stopping our LiteLLM proxy (pid ${pids%% })..."
+    litellmKillOurs
+    local t=0
+    while [ "$t" -lt 20 ] && [ -n "$(litellmOurPids)" ]; do sleep 1; t=$((t+1)); done
+    [ -n "$(litellmOurPids)" ] && litellmOurPids | xargs -r kill -9 2>/dev/null
+    ok "Proxy stopped — the agent will talk to the engine directly."
+}
+
 # ---------- 5b. reuse an identical running server ----------------------------
 # True when what is already serving is exactly what this launch would start.
 # Args: <engine> <model> <ctx> <bind>. Reloading a model that is already
@@ -1689,8 +1710,15 @@ aistackLaunchInference() {
     # ask the running engine what it calls the model before it can forward to it.
     # A refusal, or a proxy that fails to start, leaves LAUNCH_ENDPOINT pointing
     # at the engine — the session continues either way.
+    # Either answer is an instruction about the path the agent will take, so
+    # both act: yes (re)starts the proxy with a freshly generated config, no
+    # removes one that is already there. Doing nothing on "no" would leave a
+    # stale proxy running — especially on the reuse path, which skips the
+    # teardown step that would otherwise have caught it.
     if [ "$(aistackLaunchInferenceProxySelector "$engine")" = "yes" ]; then
         aistackLaunchInferenceStartProxy "$engine" "$model" "$bind" || true
+    else
+        aistackLaunchInferenceStopProxy
     fi
     agent=$(aistackLaunchInferenceAgentSelector "$engine")
     aistackLaunchInferenceStartAgent "$agent" "$engine" "$model"
