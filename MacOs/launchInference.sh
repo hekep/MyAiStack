@@ -725,8 +725,16 @@ aistackLaunchInferenceProxySelector() {
     echo "  same OpenAI API, so the agent cannot tell the difference — what you gain is" >&2
     echo "  a log of every request, token counts per call, and OpenTelemetry traces." >&2
     echo "  It costs one extra hop on localhost and about 100 MB of memory." >&2
+    # This script has no prompt helper that takes a default, so the previous
+    # answer picks which one to use: ask_yn means Enter=yes, ask_ny Enter=no.
     def=$(tune_get "PROXY_${engine}"); def="${def:-n}"
-    if ask_def "Route ${engine} through the LiteLLM proxy?" "$def"; then
+    local answered=1
+    if [ "$def" = "y" ]; then
+        ask_yn "Route ${engine} through the LiteLLM proxy?" && answered=0
+    else
+        ask_ny "Route ${engine} through the LiteLLM proxy?" && answered=0
+    fi
+    if [ "$answered" = "0" ]; then
         tune_set "PROXY_${engine}" y; echo "yes"
     else
         tune_set "PROXY_${engine}" n; echo "no"
