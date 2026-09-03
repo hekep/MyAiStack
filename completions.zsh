@@ -1,8 +1,13 @@
 # completions.zsh — tab completion for the MCP connectors, zsh.
 #
-# Sourced by shellFunctions.sh under zsh only. Same three levels as the bash
-# file, but zsh can show a description beside each candidate, so the parameter
-# hint appears inline: required flag, type or description, per argument.
+# Sourced by shellFunctions.sh under zsh only. Three levels:
+#   aistackMcpCall <TAB>                  connector names
+#   aistackMcpCall aidlab <TAB>           tool names, with their descriptions
+#   aistackMcpCall aidlab <tool> <TAB>    key= parameters, required ones first
+#
+# The first two levels read plain text written by aistackMcpBuild, so completing
+# never touches the network. Parameters need the cached JSON schema, which is
+# also local.
 #
 # ${(f)"$(...)"} splits on newlines explicitly — zsh does not word-split a plain
 # parameter expansion, which is the trap that breaks naive ports from bash.
@@ -21,13 +26,21 @@ fi
 # Completion for the functions taking <name> <tool> [key=value ...].
 _aistackMcpComplete() {
     local base="$HOME/.aistack/mcp"
-    local -a items
+    local -a items keys disp
+    local k d
     case $CURRENT in
         2) items=(${(f)"$(ls $base 2>/dev/null)"})
            _describe 'connector' items ;;
         3) items=(${(f)"$(sed $'s/\t/:/' $base/$words[2]/tools.txt 2>/dev/null)"})
            _describe 'tool' items ;;
-        *) items=(${(f)"$(python3 - $base/$words[2]/tools.json $words[3] 2>/dev/null <<'PYC'
+        *) # Parameters are added with compadd, not _describe: the match must
+           # carry NO trailing space, so the value can be typed straight after
+           # the "=". -S '' is a compadd option; _describe does not accept it,
+           # and passing it there fails with "bad option: -S".
+           while IFS=$'\t' read -r k d; do
+               [ -n "$k" ] || continue
+               keys+=("$k"); disp+=("${(r:22:)k} -- $d")
+           done < <(python3 - "$base/$words[2]/tools.json" "$words[3]" 2>/dev/null <<'PYC'
 import json, sys
 try: tools = json.load(open(sys.argv[1]))["tools"]
 except Exception: sys.exit(0)
@@ -37,11 +50,11 @@ s = t.get("inputSchema") or {}
 props = s.get("properties") or {}; req = s.get("required") or []
 for k in sorted(props, key=lambda k: (k not in req, k)):
     p = props[k] or {}
-    d = (p.get("description") or p.get("type") or "").replace(":", "\\:")
-    print(f"{k}=:{'[required] ' if k in req else ''}{d}")
+    d = (p.get("description") or p.get("type") or "").strip()
+    print(f"{k}=\t{'[required] ' if k in req else ''}{d}")
 PYC
-)"})
-           _describe -S '' 'parameter' items ;;      # -S '' : no space after "key="
+           )
+           (( $#keys )) && compadd -S '' -l -d disp -a keys ;;
     esac
 }
 

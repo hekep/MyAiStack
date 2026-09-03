@@ -640,6 +640,8 @@ else:
         if "=" not in item:
             sys.exit(f"'{item}' is not key=value (or a single JSON object)")
         k, v = item.split("=", 1)
+        if k in args:
+            sys.exit(f"'{k}' given twice — a repeated key would silently take the last value")
         if k not in props:
             sys.exit(f"'{want}' has no parameter '{k}' — try: aistackMcpTools {conn} {want}")
         ty = (props[k] or {}).get("type")
