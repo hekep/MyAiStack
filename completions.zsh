@@ -7,6 +7,15 @@
 # ${(f)"$(...)"} splits on newlines explicitly — zsh does not word-split a plain
 # parameter expansion, which is the trap that breaks naive ports from bash.
 
+# zsh's completion system is not on by default: a bare shell (no oh-my-zsh,
+# prezto or explicit compinit) has no compdef, and TAB falls back to plain
+# filename expansion. Without compinit nothing here can register at all, so
+# initialise it when it is missing. -i ignores insecure directories rather than
+# prompting at login, which macOS setups routinely trip over. This affects only
+# completion; prompts, keybindings and options are left alone.
+if (( ! $+functions[compdef] )); then
+    autoload -Uz compinit && compinit -i 2>/dev/null
+fi
 (( $+functions[compdef] )) || return 0
 
 # Completion for the functions taking <name> <tool> [key=value ...].
