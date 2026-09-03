@@ -119,10 +119,23 @@ if [ -n "$AI_STACK_OS_DIR" ]; then
     _aiStackDefine "${AI_STACK_OS_DIR}/aiModelTest.sh"     aistackModelTest
 fi
 
+# MCP connectors are platform-independent — one implementation, no OS folder.
+_aiStackDefine "${AI_STACK_HOME}/mcp.sh" aistackMcp
+
 # Whole-script entry points, so the shell offers the same commands as the repo.
 # These run the root dispatch wrappers, which pick the right OS folder.
 aistackTestAllAiModels() { "${AI_STACK_HOME}/testAllAiModels.sh" "$@"; }
 aistackNoRole()          { "${AI_STACK_HOME}/noRole.sh" "$@"; }
+
+# ---------- completion ---------------------------------------------------------
+# Tab completion for the MCP connectors lives in a per-shell file. It has to:
+# zsh's completion system uses syntax bash cannot even parse, and bash parses
+# the whole file regardless of which branch would run.
+if [ -n "${BASH_VERSION:-}" ] && [ -f "${AI_STACK_HOME}/completions.bash" ]; then
+    . "${AI_STACK_HOME}/completions.bash"
+elif [ -n "${ZSH_VERSION:-}" ] && [ -f "${AI_STACK_HOME}/completions.zsh" ]; then
+    . "${AI_STACK_HOME}/completions.zsh"
+fi
 
 # List everything this integration provides, grouped by layer.
 # Run aistackHelp after a shell restart to confirm the wiring took effect and
@@ -130,11 +143,10 @@ aistackNoRole()          { "${AI_STACK_HOME}/noRole.sh" "$@"; }
 aistackHelp() {
     echo "AI stack — repo: ${AI_STACK_HOME}   os: ${AI_STACK_OS_DIR:-UNSUPPORTED}"
     if [ -z "$AI_STACK_OS_DIR" ]; then
-        echo "  This OS has no implementations yet — nothing is available."
-        return 1
+        echo "  This OS has no engine/agent implementations — only the MCP connectors below."
     fi
     local group
-    for group in aistackInstall aistackUninstall aistackLaunchInference aistackModelTest; do
+    for group in aistackInstall aistackUninstall aistackLaunchInference aistackModelTest aistackMcp; do
         echo
         echo "  ${group}*"
         # $(echo ...) not $VAR: zsh does not word-split a plain parameter
@@ -147,6 +159,9 @@ aistackHelp() {
     echo
     echo "  whole scripts"
     echo "      aistackTestAllAiModels    aistackNoRole <Role>"
+    echo
+    echo "  MCP connectors:  aistackMcpAdd <name> --url <url>  ->  aistackMcpLogin <name>"
+    echo "      then:        aistackMcpCall <name> <tool> [key=value ...]   (tab-completes)"
     echo
     echo "  full wizards:  ${AI_STACK_HOME}/install.sh   uninstall.sh   launchInference.sh"
 }
