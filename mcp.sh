@@ -71,6 +71,12 @@ ask_def() {
 }
 fi
 
+# True when a real terminal is reachable, so a prompt would be seen and answered.
+# Tests /dev/tty rather than [ -t 0 ]: these functions run in a child bash whose
+# stdin is often redirected even when the user is sitting right there. Scripts,
+# cron jobs and agent shims fail this and are never prompted.
+_aiStackMcpInteractive() { { : </dev/tty; } 2>/dev/null; }
+
 # ---------- connector state ---------------------------------------------------
 # Print the state directory for a connector. No side effects, no existence check
 # — callers that need the connector to exist use _aiStackMcpRequire.
@@ -409,7 +415,15 @@ aistackMcpAdd() {
     #    installed are not offered — a question with one answer is not a question.
     _aiStackMcpAskAgents "$name"
 
-    warn "Next:  aistackMcpLogin ${name}"
+    # Registration on its own does nothing useful: the connector cannot list a
+    # single tool until someone signs in. Offer the next step rather than
+    # printing it, but only where an answer can actually be given — a script
+    # must never have a browser opened underneath it.
+    if _aiStackMcpInteractive && ask_def "Sign in to '${name}' now?" "y"; then
+        aistackMcpLogin "$name"
+    else
+        warn "Next:  aistackMcpLogin ${name}"
+    fi
 }
 
 # Ask, for each installed coding agent, whether this connector should be wired
