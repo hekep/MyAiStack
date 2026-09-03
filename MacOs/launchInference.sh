@@ -786,11 +786,32 @@ handler = AiStackLogger()
 PYEOF
 }
 
-# Show what has gone through the proxy. Args: [count] (default 10), or "full"
-# to print whole records. Reads the JSON Lines the proxy callback appends, so it
-# works while the proxy runs and after it has stopped.
+# Show what has gone through the proxy. Args: [count] (default 10), "full" to
+# print whole records, or "remove" to delete the log. Reads the JSON Lines the
+# proxy callback appends, so it works while the proxy runs and after it stopped.
+# The log grows without limit — every prompt and reply is kept — so removing it
+# is the way to reclaim that space.
 aistackLaunchInferenceProxyLog() {
     local n="${1:-10}"
+
+    if [ "$n" = "remove" ]; then
+        if [ ! -f "$PROXY_REQUEST_LOG" ]; then
+            ok "Nothing to remove — no request log at ${PROXY_REQUEST_LOG}"
+            return 0
+        fi
+        local sz lines
+        sz=$(du -h "$PROXY_REQUEST_LOG" 2>/dev/null | cut -f1 | tr -d ' ')
+        lines=$(wc -l < "$PROXY_REQUEST_LOG" 2>/dev/null | tr -d ' ')
+        warn "${PROXY_REQUEST_LOG} holds ${lines} calls and takes ${sz}."
+        warn "It contains every prompt and reply that went through the proxy."
+        ask_ny "Delete it?" || { ok "Kept."; return 0; }
+        rm -f "$PROXY_REQUEST_LOG"
+        ok "Deleted — ${sz} reclaimed."
+        # The callback opens the file per write, so a running proxy simply
+        # recreates it on the next call. Nothing needs restarting.
+        [ -n "$(litellmOurPids)" ] && info "The running proxy will start a new log on its next request."
+        return 0
+    fi
     if [ ! -f "$PROXY_REQUEST_LOG" ]; then
         warn "No proxy traffic recorded yet: ${PROXY_REQUEST_LOG}"
         # Saying "answer yes" is useless advice to someone who did. Work out
@@ -819,6 +840,15 @@ for line in open(sys.argv[1]):
     print("-" * 70)' "$PROXY_REQUEST_LOG"
         return 0
     fi
+    case "$n" in
+        ''|*[!0-9]*)
+            aiStackUsage "aistackLaunchInferenceProxyLog [count | full | remove]" \
+                "count   : how many recent calls to summarise (default 10)" \
+                "full    : print whole records, one JSON object per call" \
+                "remove  : delete the log and reclaim its space" \
+                "example : aistackLaunchInferenceProxyLog 20"
+            return 2 ;;
+    esac
     echo "${BOLD}Last ${n} calls through the proxy${RESET}  (${PROXY_REQUEST_LOG})" >&2
     tail -n "$n" "$PROXY_REQUEST_LOG" | python3 -c '
 import json, sys
