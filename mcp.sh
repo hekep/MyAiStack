@@ -544,7 +544,7 @@ aistackMcpBuild() {
     _aiStackMcpInit "$name" || return 1
     _aiStackMcpRpc "$name" tools/list '{}' > "$dir/.tools.raw" || { rm -f "$dir/.tools.raw"; return 1; }
 
-    python3 - "$dir" <<'PY'
+    n=$(python3 - "$dir" <<'PY'
 import json, sys, time
 d = sys.argv[1]
 r = json.load(open(f"{d}/.tools.raw"))
@@ -557,7 +557,7 @@ with open(f"{d}/tools.txt", "w") as f:                     # name<TAB>summary, f
         f.write(f"{t['name']}\t{summary[0] if summary else ''}\n")
 print(len(tools))
 PY
-    n=$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1]))["tools"]))' "$dir/tools.json")
+) || return 1
     rm -f "$dir/.tools.raw"
     ok "${name}: ${n} tools cached."
     [ -n "${AI_STACK_QUIET:-}" ] || cut -f1 "$dir/tools.txt" | sed 's/^/      /' >&2
@@ -621,12 +621,13 @@ _aiStackMcpFirstTool() {
 # are refused here rather than by the server, so the fix is named locally.
 _aiStackMcpArgs() {
     local name="$1" tool="$2"; shift 2
-    python3 - "$(_aiStackMcpDir "$name")/tools.json" "$tool" "$@" <<'PY'
+    python3 - "$(_aiStackMcpDir "$name")/tools.json" "$tool" "$name" "$@" <<'PY'
 import json, sys
-tools = json.load(open(sys.argv[1]))["tools"]; want = sys.argv[2]; rest = sys.argv[3:]
+tools = json.load(open(sys.argv[1]))["tools"]; want = sys.argv[2]; conn = sys.argv[3]; rest = sys.argv[4:]
 t = next((t for t in tools if t["name"] == want), None)
 if not t:
-    sys.exit(f"no tool '{want}' — see: aistackMcpTools {json.load(open(sys.argv[1]))and''}")
+    names = ", ".join(x["name"] for x in tools)
+    sys.exit(f"no tool '{want}' on '{conn}'. Available: {names}")
 schema = t.get("inputSchema") or {}
 props = schema.get("properties") or {}; req = schema.get("required") or []
 
@@ -640,7 +641,7 @@ else:
             sys.exit(f"'{item}' is not key=value (or a single JSON object)")
         k, v = item.split("=", 1)
         if k not in props:
-            sys.exit(f"'{want}' has no parameter '{k}' — try: aistackMcpTools <name> {want}")
+            sys.exit(f"'{want}' has no parameter '{k}' — try: aistackMcpTools {conn} {want}")
         ty = (props[k] or {}).get("type")
         if ty in ("integer", "number"):
             try: args[k] = int(v) if ty == "integer" else float(v)
@@ -655,7 +656,7 @@ else:
 
 missing = [k for k in req if k not in args]
 if missing:
-    sys.exit(f"'{want}' requires {', '.join(missing)} — see: aistackMcpTools <name> {want}")
+    sys.exit(f"'{want}' requires {', '.join(missing)} — see: aistackMcpTools {conn} {want}")
 json.dump(args, sys.stdout)
 PY
 }
@@ -667,7 +668,11 @@ PY
 # type here is what an agent runs.
 aistackMcpCall() {
     if [ $# -lt 2 ]; then
-        aiStackUsage "aistackMcpCall <name> <tool> [key=value ... | '{json}']" "$(_aiStackMcpCallExamples)"
+        # one argument per line: aiStackUsage indents each argument it is given,
+        # so a single multi-line string would align only its first line
+        local -a _ex=() _l
+        while IFS= read -r _l; do _ex+=("$_l"); done < <(_aiStackMcpCallExamples)
+        aiStackUsage "aistackMcpCall <name> <tool> [key=value ... | '{json}']" "${_ex[@]}"
         return 2
     fi
     local name="$1" tool="$2"; shift 2
@@ -715,8 +720,14 @@ for t in tools:
     for k in req:
         p = props.get(k) or {}
         ty = p.get("type")
-        ex.append(f"{k}=" + ("2026-09-01" if "date" in (p.get("description","")+k).lower()
-                             else "10" if ty in ("integer","number") else "true" if ty=="boolean" else "value"))
+        blurb = (p.get("description", "") + " " + k).lower()
+        if "date" in blurb or "time" in blurb:
+            # ISO 8601 *datetime*: servers that say "ISO 8601" usually reject a
+            # bare date, and an example that fails is worse than none
+            ex.append(f"{k}=2026-09-01T00:00:00Z")
+        elif ty in ("integer", "number"): ex.append(f"{k}=10")
+        elif ty == "boolean":             ex.append(f"{k}=true")
+        else:                             ex.append(f"{k}=value")
     print(f"example : aistackMcpCall {name} {t['name']}" + (" " + " ".join(ex) if ex else ""))
     shown += 1
     if shown == 3: break
