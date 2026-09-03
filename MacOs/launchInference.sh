@@ -119,6 +119,32 @@ mlxml_installed()    { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null
 # True when the ollama binary is on PATH.
 ollama_installed()   { command -v ollama >/dev/null 2>&1; }
 
+# ---------- monitoring proxy --------------------------------------------------
+# LiteLLM sits in front of an engine and speaks the same OpenAI API, so an agent
+# cannot tell the difference. What it adds is a record: every request logged,
+# OpenTelemetry traces, and token counts per call.
+LITELLM_PORT="${LITELLM_PORT:-4000}"
+LITELLM_CONFIG="${LITELLM_CONFIG:-$HOME/.aistack/litellm.yaml}"
+
+# True when the LiteLLM proxy is installed (a uv tool, or already on PATH).
+# Installed by aistackInstallLitellmMonitoring; absent means the proxy question
+# is never asked.
+litellm_installed() {
+    command -v litellm >/dev/null 2>&1 || \
+        { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^litellm'; }
+}
+
+# PIDs of the LiteLLM WE run, identified by the port we serve on — the same
+# rule as llama-server: never match a bare process name, because the user may
+# be running their own proxy for something else.
+litellmOurPids()  { pgrep -f "litellm .*--port ${LITELLM_PORT}" 2>/dev/null; }
+# Stop only our proxy, using the same port-scoped match.
+litellmKillOurs() { pkill  -f "litellm .*--port ${LITELLM_PORT}" 2>/dev/null; }
+
+# True when the proxy is answering on its port.
+litellm_up() { curl -sf --max-time 3 "http://127.0.0.1:${LITELLM_PORT}/health/liveliness" >/dev/null 2>&1 \
+               || curl -sf --max-time 3 "http://127.0.0.1:${LITELLM_PORT}/v1/models" >/dev/null 2>&1; }
+
 # This Mac's LAN address on en0, falling back to en1 (Wi-Fi vs Ethernet).
 # Empty when offline, which the network selector treats as localhost-only.
 lan_ip() { ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null; }
@@ -168,6 +194,7 @@ _hintExamples() {
             engine)                out="${out}example : ${fn} ${e}" ;;
             engine-host)           out="${out}example : ${fn} ${e} 127.0.0.1" ;;
             engine-model)          out="${out}example : ${fn} ${e} ${m}" ;;
+            engine-model-bind)     out="${out}example : ${fn} ${e} ${m} 127.0.0.1" ;;
             engine-model-ctx)      out="${out}example : ${fn} ${e} ${m} 32768" ;;
             engine-model-ctx-bind) out="${out}example : ${fn} ${e} ${m} 32768 127.0.0.1" ;;
             agent-engine-model)    out="${out}example : ${fn} ${agent:-Pi} ${e} ${m}" ;;
@@ -677,6 +704,103 @@ aistackLaunchInferenceNetworkSelector() {
     done
 }
 
+# ---------- 4c. monitoring proxy selector ------------------------------------
+# Ask whether to route this session through the LiteLLM proxy; prints "yes" or
+# "no" on stdout. Args: <engine>. Asked only when LiteLLM is installed, so a
+# machine without it is never offered a choice it cannot make. The answer is
+# remembered per engine and becomes the next run's default.
+aistackLaunchInferenceProxySelector() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "aistackLaunchInferenceProxySelector <engine>" \
+            "$(_hintEngine)" \
+            "prints  : yes | no — whether to put LiteLLM in front of the engine" \
+            "$(_hintExamples aistackLaunchInferenceProxySelector engine)"
+        return 2
+    fi
+    local engine="${1:-}" def sel
+    litellm_installed || { echo "no"; return 0; }        # nothing to ask about
+    echo >&2
+    echo "${BOLD}Request logging for ${engine}${RESET}" >&2
+    echo "  LiteLLM can sit in front of the engine on port ${LITELLM_PORT}. It speaks the" >&2
+    echo "  same OpenAI API, so the agent cannot tell the difference — what you gain is" >&2
+    echo "  a log of every request, token counts per call, and OpenTelemetry traces." >&2
+    echo "  It costs one extra hop on localhost and about 100 MB of memory." >&2
+    def=$(tune_get "PROXY_${engine}"); def="${def:-n}"
+    if ask_def "Route ${engine} through the LiteLLM proxy?" "$def"; then
+        tune_set "PROXY_${engine}" y; echo "yes"
+    else
+        tune_set "PROXY_${engine}" n; echo "no"
+    fi
+}
+
+# ---------- 7b. start the monitoring proxy -----------------------------------
+# Put LiteLLM in front of a running engine and repoint LAUNCH_ENDPOINT at it.
+# Args: <engine> <model> <bind>. Writes a config naming one model — the one just
+# started — so the id an agent asks for is the id the engine answers to. Leaves
+# LAUNCH_ENDPOINT untouched and returns 1 if the proxy will not come up, so a
+# failed proxy degrades to talking to the engine directly rather than to nothing.
+aistackLaunchInferenceStartProxy() {
+    if [ $# -lt 3 ]; then
+        aiStackUsage "aistackLaunchInferenceStartProxy <engine> <model> <bind>" \
+            "$(_hintEngine)" \
+            "bind    : 127.0.0.1 or your LAN IP — where the ENGINE listens" \
+            "$(_hintExamples aistackLaunchInferenceStartProxy engine-model-bind)"
+        return 2
+    fi
+    local engine="$1" model="$2" bind="$3" port upstream mid t=0
+    litellm_installed || { fail "LiteLLM is not installed — aistackInstallLitellmMonitoring"; return 1; }
+    port=$(engine_port "$engine")
+    upstream="http://${bind}:${port}"
+
+    # Ask the engine what it calls the model. llama-server and mlx_lm.server
+    # each name models their own way, and the proxy has to forward an id the
+    # engine will accept.
+    LAUNCH_ENDPOINT="$upstream" mid=$(endpointModelId); [ -z "$mid" ] && mid="$model"
+
+    # A proxy already on the port is only reusable if it is ours; anything else
+    # is the user's and must not be touched.
+    if litellm_up; then
+        if [ -n "$(litellmOurPids)" ]; then
+            info "Restarting our LiteLLM proxy for the new model..."
+            litellmKillOurs; sleep 2
+        else
+            fail "Something else is already serving port ${LITELLM_PORT}."
+            warn "Set LITELLM_PORT to a free port, or stop that process first:"
+            lsof -nP -iTCP:"${LITELLM_PORT}" -sTCP:LISTEN >&2
+            return 1
+        fi
+    fi
+
+    mkdir -p "$(dirname "$LITELLM_CONFIG")"
+    # openai/<id> tells LiteLLM to speak the OpenAI protocol to api_base rather
+    # than to look the name up as a hosted model.
+    cat > "$LITELLM_CONFIG" <<YAML
+# GENERATED by aistackLaunchInferenceStartProxy — rewritten on every launch.
+model_list:
+  - model_name: ${mid}
+    litellm_params:
+      model: openai/${mid}
+      api_base: ${upstream}/v1
+      api_key: local
+litellm_settings:
+  drop_params: true
+YAML
+
+    info "Starting LiteLLM on port ${LITELLM_PORT} in front of ${upstream}..."
+    nohup litellm --config "$LITELLM_CONFIG" --port "$LITELLM_PORT" \
+          >"${TMPDIR:-/tmp}/litellm.log" 2>&1 &
+    while [ "$t" -lt 60 ] && ! litellm_up; do sleep 2; t=$((t+2)); done
+    if ! litellm_up; then
+        fail "LiteLLM did not come up in ${t}s — see ${TMPDIR:-/tmp}/litellm.log"
+        warn "Continuing without it: the agent will talk to ${engine} directly."
+        litellmKillOurs
+        return 1
+    fi
+    LAUNCH_ENDPOINT="http://127.0.0.1:${LITELLM_PORT}"
+    ok "Proxy:    ${LAUNCH_ENDPOINT} -> ${upstream}   (log: ${TMPDIR:-/tmp}/litellm.log)"
+    return 0
+}
+
 # ---------- 4b. coding agent selector ----------------------------------------
 # Choose the coding agent; prints its name, or "none", on stdout.
 # Args: <engine>. Offers only agents that are installed AND compatible with this
@@ -742,6 +866,14 @@ aistackLaunchInferenceAgentSelector() {
 # switching engines. Declining is fine — the new model just gets less memory.
 aistackLaunchInferenceKillPrevious() {
     local target="${1:-}" rows line eng what mem killed=0
+    # Our proxy is configured for one model. Whatever happens below, that model
+    # is about to change, so a proxy we started is always stale here. It is not
+    # an "inference engine" and holds no weights, so it is stopped quietly and
+    # without asking — a proxy the user started themselves is left alone.
+    if [ -n "$(litellmOurPids)" ]; then
+        litellmKillOurs && ok "Stopped our LiteLLM proxy — it pointed at the previous model."
+    fi
+
     rows=$(runningEngines)
     if [ -z "$rows" ]; then
         ok "No inference engine is running — all memory is free for this launch."
@@ -1332,6 +1464,13 @@ aistackLaunchInference() {
     aistackLaunchInferenceKillPrevious "$engine"
     aistackLaunchInferencePrerequisites "$engine" "$model" "$ctx" || return 1
     aistackLaunchInferenceStart "$engine" "$model" "$ctx" "$bind" || return 1
+    # The proxy question comes after the engine is up, because the proxy has to
+    # ask the running engine what it calls the model before it can forward to it.
+    # A refusal, or a proxy that fails to start, leaves LAUNCH_ENDPOINT pointing
+    # at the engine — the session continues either way.
+    if [ "$(aistackLaunchInferenceProxySelector "$engine")" = "yes" ]; then
+        aistackLaunchInferenceStartProxy "$engine" "$model" "$bind" || true
+    fi
     agent=$(aistackLaunchInferenceAgentSelector "$engine")
     aistackLaunchInferenceStartAgent "$agent" "$engine" "$model"
 }
