@@ -272,27 +272,13 @@ _aiStackMcpInit() {
 # registration, then does RFC 7591 dynamic client registration. Asks which
 # installed coding agents should get this connector; writes no tokens (that is
 # aistackMcpLogin) and no tool shims (that is aistackMcpBuild).
-aistackMcpAdd() {
-    if [ $# -lt 3 ] || [ "$2" != "--url" ]; then
-        aiStackUsage "aistackMcpAdd <name> --url <mcp-url>" \
-            "name    : [a-z][a-z0-9-]* — becomes /mcp-<name> in Pi and the tool prefix" \
-            "url     : the server's MCP endpoint" \
-            "example : aistackMcpAdd aidlab --url https://my.aidlab.com/mcp"
-        return 2
-    fi
-    local name="$1" url="$3" dir hdr rm_url meta reg cid
-    case "$name" in
-        [a-z]*) case "$name" in *[!a-z0-9-]*) fail "name must match [a-z][a-z0-9-]* — got '${name}'."; return 1 ;; esac ;;
-        *) fail "name must start with a lowercase letter — got '${name}'."; return 1 ;;
-    esac
-    dir=$(_aiStackMcpDir "$name")
-    if [ -f "$dir/server.json" ]; then
-        ok "Connector '${name}' already registered as $(_aiStackMcpField "$name" client_id)."
-        warn "Remove it first to re-register:  aistackMcpRemove ${name}"
-        return 0
-    fi
-
-    info "aistackMcpAdd — ${name} → ${url}"
+# Discover a server's OAuth configuration and register as a client. Args:
+# <name> <url> <target-dir>. Writes <target-dir>/server.json on success and
+# touches nothing else, so a caller can point this at a scratch directory and
+# keep the previous registration until it is known to have worked.
+_aiStackMcpRegister() {
+    local name="$1" url="$2" dir="$3" hdr rm_url meta reg
+    info "Registering ${name} → ${url}"
 
     # 1. the challenge: an MCP server tells us where its resource metadata lives
     hdr=$(curl -s -D - -o /dev/null --max-time 20 -X POST "$url" \
@@ -370,8 +356,53 @@ json.dump({
 }, open(f"{d}/server.json", "w"), indent=2)
 PY
     rm -f "$dir/.reg.json"
-    cid=$(_aiStackMcpField "$name" client_id)
-    ok "Registered — client_id ${cid}"
+
+    return 0
+}
+
+aistackMcpAdd() {
+    if [ $# -lt 3 ] || [ "$2" != "--url" ]; then
+        aiStackUsage "aistackMcpAdd <name> --url <mcp-url>" \
+            "name    : [a-z][a-z0-9-]* — becomes /mcp-<name> in Pi and the tool prefix" \
+            "url     : the server's MCP endpoint" \
+            "example : aistackMcpAdd aidlab --url https://my.aidlab.com/mcp"
+        return 2
+    fi
+    local name="$1" url="$3" dir backup=""
+    case "$name" in
+        [a-z]*) case "$name" in *[!a-z0-9-]*) fail "name must match [a-z][a-z0-9-]* — got '${name}'."; return 1 ;; esac ;;
+        *) fail "name must start with a lowercase letter — got '${name}'."; return 1 ;;
+    esac
+    dir=$(_aiStackMcpDir "$name")
+
+    if [ -f "$dir/server.json" ]; then
+        ok "Connector '${name}' is already registered as $(_aiStackMcpField "$name" client_id)."
+        warn "Re-registering asks the provider for a NEW client and deletes the stored"
+        warn "tokens, so you would sign in again with: aistackMcpLogin ${name}"
+        warn "To refresh only its tools and agent plugins, keeping the login, run:"
+        warn "  aistackMcpBuild ${name}"
+        ask_def "Remove '${name}' and register it again?" "y" || { ok "Kept as it is."; return 0; }
+        # Move the old one aside rather than deleting it. Registration reaches
+        # the network and can fail for reasons that have nothing to do with the
+        # user; losing a working login to a timeout would be indefensible.
+        _aiStackMcpActivate "$name" "" off
+        backup="${dir}.replacing.$$"
+        mv "$dir" "$backup" || { fail "Could not move ${dir} aside."; return 1; }
+        ok "Previous registration held aside until the new one succeeds."
+    fi
+
+    mkdir -p "$dir"
+    if ! _aiStackMcpRegister "$name" "$url" "$dir"; then
+        rm -rf "$dir"
+        if [ -n "$backup" ]; then
+            mv "$backup" "$dir"
+            _aiStackMcpActivate "$name" "" on
+            warn "Registration failed — '${name}' has been restored exactly as it was."
+        fi
+        return 1
+    fi
+    [ -n "$backup" ] && rm -rf "$backup"
+    ok "Registered — client_id $(_aiStackMcpField "$name" client_id)"
     ok "Scopes: $(_aiStackMcpField "$name" scopes)"
 
     # 5. which installed agents should see this connector? Agents that are not
@@ -1070,6 +1101,16 @@ PY
     return 0
 }
 
+# Delete a connector without asking. Args: <name>. Deactivates it in every
+# agent first so no plugin is left pointing at a directory that has gone, then
+# removes its state. The confirmation belongs to the caller — aistackMcpRemove
+# asks before this, aistackMcpAdd asks its own re-registration question.
+_aiStackMcpPurge() {
+    local name="$1" dir; dir=$(_aiStackMcpDir "$name")
+    _aiStackMcpActivate "$name" "" off
+    rm -rf "$dir"
+}
+
 # Remove a connector entirely. Args: <name>. Deactivates it in every agent
 # first, then deletes its state directory — registration, tokens and all.
 # The provider is not told; access is revoked in your account with them.
@@ -1081,10 +1122,9 @@ aistackMcpRemove() {
     local name="$1" dir
     _aiStackMcpRequire "$name" || return 1
     dir=$(_aiStackMcpDir "$name")
-    warn "This deletes ${dir} — registration, tokens and generated shims."
+    warn "This deletes ${dir} — registration, tokens and generated plugins."
     ask_def "Remove connector '${name}'?" "n" || { ok "Kept."; return 0; }
-    _aiStackMcpActivate "$name" "" off
-    rm -rf "$dir"
+    _aiStackMcpPurge "$name"
     ok "${name}: removed."
     warn "Access is not revoked upstream — do that in your ${name} account if it matters."
 }
