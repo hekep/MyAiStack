@@ -793,8 +793,22 @@ aistackLaunchInferenceProxyLog() {
     local n="${1:-10}"
     if [ ! -f "$PROXY_REQUEST_LOG" ]; then
         warn "No proxy traffic recorded yet: ${PROXY_REQUEST_LOG}"
-        echo "         Requests appear here once a launch is routed through LiteLLM." >&2
-        echo "         Answer yes to \"Route <engine> through the LiteLLM proxy?\"." >&2
+        # Saying "answer yes" is useless advice to someone who did. Work out
+        # which of the three actual reasons applies.
+        local pids; pids=$(litellmOurPids | tr '\n' ' ')
+        if [ -z "$pids" ]; then
+            echo "         No proxy is running. Relaunch and answer yes to" >&2
+            echo "         \"Route <engine> through the LiteLLM proxy?\"." >&2
+        elif ! grep -q '^  callbacks:' "$LITELLM_CONFIG" 2>/dev/null; then
+            echo "         A proxy IS running (pid ${pids%% }), but its config has no request" >&2
+            echo "         logger — it was started before logging existed, or by an older" >&2
+            echo "         version. Relaunch to regenerate the config:" >&2
+            echo "             ${LITELLM_CONFIG}" >&2
+            echo "         The model stays resident, so this costs seconds, not a reload." >&2
+        else
+            echo "         A proxy is running and configured to log, but nothing has been" >&2
+            echo "         sent through it yet. Ask the agent something." >&2
+        fi
         return 1
     fi
     if [ "$n" = "full" ]; then
@@ -899,8 +913,9 @@ except Exception: print("")' 2>/dev/null)
 # ---------- 4c. monitoring proxy selector ------------------------------------
 # Ask whether to route this session through the LiteLLM proxy; prints "yes" or
 # "no" on stdout. Args: <engine>. Asked only when LiteLLM is installed, so a
-# machine without it is never offered a choice it cannot make. The answer is
-# remembered per engine and becomes the next run's default.
+# machine without it is never offered a choice it cannot make. Enter always
+# means no, and the answer is not remembered: an extra component in the path
+# should be chosen each time, not inherited from a previous session.
 aistackLaunchInferenceProxySelector() {
     if [ $# -lt 1 ]; then
         aiStackUsage "aistackLaunchInferenceProxySelector <engine>" \
@@ -909,7 +924,7 @@ aistackLaunchInferenceProxySelector() {
             "$(_hintExamples aistackLaunchInferenceProxySelector engine)"
         return 2
     fi
-    local engine="${1:-}" def sel
+    local engine="${1:-}"
     litellm_installed || { echo "no"; return 0; }        # nothing to ask about
     echo >&2
     echo "${BOLD}Request logging for ${engine}${RESET}" >&2
@@ -917,19 +932,14 @@ aistackLaunchInferenceProxySelector() {
     echo "  same OpenAI API, so the agent cannot tell the difference — what you gain is" >&2
     echo "  a log of every request, token counts per call, and OpenTelemetry traces." >&2
     echo "  It costs one extra hop on localhost and about 100 MB of memory." >&2
-    # This script has no prompt helper that takes a default, so the previous
-    # answer picks which one to use: ask_yn means Enter=yes, ask_ny Enter=no.
-    def=$(tune_get "PROXY_${engine}"); def="${def:-n}"
-    local answered=1
-    if [ "$def" = "y" ]; then
-        ask_yn "Route ${engine} through the LiteLLM proxy?" && answered=0
+    # Always Enter = no, and deliberately NOT remembered. Every other choice in
+    # this launcher describes the model you want; this one adds a component in
+    # front of it. Turning that on by holding Enter, because it was on last
+    # week, is how a proxy ends up in a stack nobody meant to have one in.
+    if ask_ny "Route ${engine} through the LiteLLM proxy?"; then
+        echo "yes"
     else
-        ask_ny "Route ${engine} through the LiteLLM proxy?" && answered=0
-    fi
-    if [ "$answered" = "0" ]; then
-        tune_set "PROXY_${engine}" y; echo "yes"
-    else
-        tune_set "PROXY_${engine}" n; echo "no"
+        echo "no"
     fi
 }
 
