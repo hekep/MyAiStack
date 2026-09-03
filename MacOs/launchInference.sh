@@ -704,6 +704,79 @@ aistackLaunchInferenceNetworkSelector() {
     done
 }
 
+# ---------- 5b. reuse an identical running server ----------------------------
+# True when what is already serving is exactly what this launch would start.
+# Args: <engine> <model> <ctx> <bind>. Reloading a model that is already
+# resident costs minutes and re-allocates tens of gigabytes for no change, so
+# the match is checked before anything is killed. Any difference — different
+# model, different context, not answering on the requested address — returns 1
+# and the normal start path runs.
+aistackLaunchInferenceReuse() {
+    if [ $# -lt 4 ]; then
+        aiStackUsage "aistackLaunchInferenceReuse <engine> <model> <ctx> <bind>" \
+            "$(_hintEngine)" \
+            "returns : 0 when that exact model is already serving on that address" \
+            "$(_hintExamples aistackLaunchInferenceReuse engine-model-ctx-bind)"
+        return 2
+    fi
+    local engine="$1" model="$2" ctx="$3" bind="$4" port cur served f
+
+    # Must answer on the address we were asked for: a server bound to loopback
+    # cannot satisfy a request for the LAN address.
+    engine_up "$engine" "$bind" || return 1
+    port=$(engine_port "$engine")
+
+    case "$engine" in
+        Ollama)
+            ollama ps 2>/dev/null | awk 'NR>1 {print $1}' | grep -qxF "$model" || return 1 ;;
+        Llama.cpp)
+            cur=$(curl -sf --max-time 8 "http://${bind}:${port}/v1/models" 2>/dev/null | python3 -c '
+import json,sys
+try:
+    xs=(json.load(sys.stdin).get("data") or [])
+    print(xs[0].get("id","") if xs else "")
+except Exception: print("")' 2>/dev/null)
+            # --alias makes the server report the tag; one started by hand reports
+            # the .gguf path. Accept either, or an identical model is reloaded.
+            if [ "$cur" != "$model" ]; then
+                f="${LLAMACPP_MODEL_DIR}/$(printf '%s' "$model" | sed 's|/|__|g; s|:|@|').gguf"
+                case "$cur" in
+                    *"$(basename "$f")"*) : ;;
+                    *) return 1 ;;
+                esac
+            fi ;;
+        MLX-LM)
+            cur=$(curl -sf --max-time 8 "http://${bind}:${port}/v1/models" 2>/dev/null | python3 -c '
+import json,sys
+try:
+    xs=(json.load(sys.stdin).get("data") or [])
+    print(xs[0].get("id","") if xs else "")
+except Exception: print("")' 2>/dev/null)
+            [ "$cur" = "$model" ] || return 1 ;;
+        *) return 1 ;;
+    esac
+
+    # Same model, but a different context would mean a different KV allocation.
+    served=$(_servedContext "$engine" "$bind")
+    if [ "${served:-0}" -gt 0 ] && [ "$served" -ne "$ctx" ]; then
+        info "Already serving ${model}, but at $(( served / 1024 ))K context — you asked for $(( ctx / 1024 ))K."
+        return 1
+    fi
+
+    echo >&2
+    echo "${BOLD}=================== Already running ===================${RESET}" >&2
+    ok "Engine:   ${engine}"
+    ok "Model:    ${model}"
+    if [ "${served:-0}" -gt 0 ]; then
+        ok "Context:  $(( served / 1024 ))K tokens"
+    else
+        ok "Context:  as previously started (${engine} does not report it)"
+    fi
+    ok "Endpoint: http://${bind}:${port}"
+    ok "Reusing it — nothing was restarted, the model stays resident."
+    return 0
+}
+
 # ---------- 4c. monitoring proxy selector ------------------------------------
 # Ask whether to route this session through the LiteLLM proxy; prints "yes" or
 # "no" on stdout. Args: <engine>. Asked only when LiteLLM is installed, so a
@@ -1468,10 +1541,17 @@ aistackLaunchInference() {
     model=$(aistackLaunchInferenceModelSelector "$engine") || return 1
     ctx=$(aistackLaunchInferenceContextSelector "$engine" "$model") || return 1
     bind=$(aistackLaunchInferenceNetworkSelector "$engine") || return 1
-    aistackLaunchInferenceFreeResources
-    aistackLaunchInferenceKillPrevious "$engine"
-    aistackLaunchInferencePrerequisites "$engine" "$model" "$ctx" || return 1
-    aistackLaunchInferenceStart "$engine" "$model" "$ctx" "$bind" || return 1
+    # Nothing is freed, killed or gated when the identical model is already
+    # serving: the memory check would fail against memory this very model holds,
+    # and the kill prompt would offer to destroy what we are about to rebuild.
+    if aistackLaunchInferenceReuse "$engine" "$model" "$ctx" "$bind"; then
+        LAUNCH_ENDPOINT="http://${bind}:$(engine_port "$engine")"
+    else
+        aistackLaunchInferenceFreeResources
+        aistackLaunchInferenceKillPrevious "$engine"
+        aistackLaunchInferencePrerequisites "$engine" "$model" "$ctx" || return 1
+        aistackLaunchInferenceStart "$engine" "$model" "$ctx" "$bind" || return 1
+    fi
     # The proxy question comes after the engine is up, because the proxy has to
     # ask the running engine what it calls the model before it can forward to it.
     # A refusal, or a proxy that fails to start, leaves LAUNCH_ENDPOINT pointing
