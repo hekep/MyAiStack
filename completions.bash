@@ -5,7 +5,7 @@
 #   aistackMcpCall aidlab <TAB>           tool names
 #   aistackMcpCall aidlab <tool> <TAB>    key= parameters, required ones first
 #
-# The first two levels read plain text written by aistackMcpTest, so completing
+# The first two levels read plain text written by aistackMcpBuild, so completing
 # never touches the network. Descriptions need JSON, so bash offers them via
 # "aistackMcpTools <name> <tool>" instead — zsh shows them inline.
 
@@ -44,5 +44,5 @@ _aistackMcpNameOnly() {
 }
 
 complete -F _aistackMcpComplete aistackMcpCall aistackMcpTools
-complete -F _aistackMcpNameOnly aistackMcpLogin aistackMcpTest aistackMcpRemove \
+complete -F _aistackMcpNameOnly aistackMcpLogin aistackMcpBuild aistackMcpRemove \
                                 aistackMcpLogout aistackMcpRefresh aistackMcpEnable aistackMcpDisable

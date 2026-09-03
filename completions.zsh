@@ -43,5 +43,5 @@ _aistackMcpNameOnly() {
 }
 
 compdef _aistackMcpComplete aistackMcpCall aistackMcpTools
-compdef _aistackMcpNameOnly aistackMcpLogin aistackMcpTest aistackMcpRemove \
+compdef _aistackMcpNameOnly aistackMcpLogin aistackMcpBuild aistackMcpRemove \
                             aistackMcpLogout aistackMcpRefresh aistackMcpEnable aistackMcpDisable
