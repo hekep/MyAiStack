@@ -1369,7 +1369,7 @@ llamacppPullModel() {
     # "local" before assigning any of them, so "local a=$1 b=${a%:*}" leaves b
     # empty — or worse, silently picks up a same-named variable from the
     # caller's scope (local is dynamically scoped).
-    local tag="$1" out part meta file expected have url repo quant
+    local tag="$1" out part meta meta_rc file expected have url repo quant
     repo="${tag%:*}"
     quant="${tag##*:}"
     out=$(llamacppLocalFile "$tag")
@@ -1381,24 +1381,48 @@ llamacppPullModel() {
     info "Resolving the ${quant} GGUF in ${repo}..."
     meta=$(curl -sf --max-time 25 "https://huggingface.co/api/models/${repo}/tree/main" 2>/dev/null \
         | python3 -c "
-import json, sys
+import json, re, sys
 q = sys.argv[1]
 try:
     t = json.load(sys.stdin)
 except Exception:
     sys.exit(1)
+# Uploaders disagree on the delimiter before the quant: bartowski writes
+# repo-Q8_0.gguf, mradermacher writes repo.Q8_0.gguf. Matching only "-" silently
+# found nothing in half the repos this catalogue lists.
+pat = re.compile(r'(?:^|[-_.])%s(?:-\d+-of-\d+)?\.gguf$' % re.escape(q), re.I)
+hits = []
 for e in t:
     p = e.get('path', '')
-    if e.get('type') != 'directory' and p.endswith('-%s.gguf' % q):
-        lfs = e.get('lfs') or {}
-        print('%s\t%s' % (p, lfs.get('size') or e.get('size') or 0))
-        break
+    if e.get('type') == 'directory' or not pat.search(p):
+        continue
+    # mmproj is the vision projector that ships beside a multimodal model. It
+    # carries the quant in its name and is a fraction of the size, so a loose
+    # match downloads it instead of the weights and reports success.
+    if 'mmproj' in p.lower():
+        continue
+    lfs = e.get('lfs') or {}
+    hits.append((p, lfs.get('size') or e.get('size') or 0))
+if not hits:
+    sys.exit(1)
+if len(hits) > 1:
+    # a sharded model: every part is needed, and this downloader fetches one
+    # file. Say so rather than pulling a fragment that cannot load.
+    sys.stderr.write('SHARDED:%d\n' % len(hits))
+    sys.exit(2)
+print('%s\t%s' % hits[0])
 " "$quant" 2>/dev/null)
     file=${meta%%$'\t'*}
     expected=${meta##*$'\t'}
     case "${expected:-}" in ''|*[!0-9]*) expected=0 ;; esac
     if [ -z "$file" ]; then
-        fail "No ${quant} GGUF found in ${repo} — skipping."
+        if [ "$meta_rc" = "2" ]; then
+            fail "${quant} in ${repo} is split across several files."
+            warn "This downloader fetches one file; a sharded model needs every part."
+            warn "Pick a smaller quant that fits in one file, or fetch it by hand."
+        else
+            fail "No ${quant} GGUF found in ${repo} — skipping."
+        fi
         return 1
     fi
 
