@@ -944,6 +944,50 @@ export default function (pi: ExtensionAPI) {
    * which is a different claim from "nothing was recorded in the window you
    * asked about" — and the model cannot tell them apart without being told.
    */
+  /**
+   * Summarise a long result before the model ever sees it. One page of HRV is
+   * 200 records and about 3100 tokens; five such calls fill a 32K window and the
+   * session dies mid-conversation. The statistics here are computed, so the
+   * model reports arithmetic it did not have to do — the same rule the rest of
+   * this toolkit follows: measured, never estimated.
+   */
+  const KEEP = 5;
+  function r1(n: number): number { return Math.round(n * 10) / 10; }
+  function reduceResult(text: string): string {
+    let d: any;
+    try { d = JSON.parse(text); } catch { return text; }
+    const arr = d && d.data;
+    if (!Array.isArray(arr) || arr.length <= KEEP) return text;
+    const nums: number[] = [];
+    for (const x of arr) { if (x && typeof x.value === "number") nums.push(x.value); }
+    const out: any = { records: arr.length };
+    if (nums.length) {
+      let sum = 0, lo = nums[0], hi = nums[0];
+      for (const v of nums) { sum += v; if (v < lo) lo = v; if (v > hi) hi = v; }
+      out.value_summary = { n: nums.length, mean: r1(sum / nums.length), min: r1(lo), max: r1(hi) };
+    }
+    const secs: Record<string, number> = {};
+    for (const x of arr) {
+      if (x && typeof x.duration_seconds === "number") {
+        const k = String(x.type || "total");
+        secs[k] = (secs[k] || 0) + x.duration_seconds;
+      }
+    }
+    if (Object.keys(secs).length) {
+      const mins: Record<string, number> = {};
+      for (const k of Object.keys(secs)) mins[k] = Math.round(secs[k] / 60);
+      out.minutes_by_type = mins;
+    }
+    out.first = arr.slice(0, KEEP);
+    out.range = { from: arr[arr.length - 1] && (arr[arr.length - 1].date || arr[arr.length - 1].start_date),
+                  to: arr[0] && (arr[0].date || arr[0].start_date) };
+    if (d.has_more) out.more_pages_existed = true;
+    return JSON.stringify(out) +
+      "\n\nNOTE: " + arr.length + " records were summarised by MyAiStack so they fit the " +
+      "context. The statistics above are computed exactly; use them as given and do not " +
+      "recompute or estimate. Do not request this same range again.";
+  }
+
   function annotate(text: string, args: Record<string, any>): string {
     if (!/"data"\s*:\s*\[\s*\]/.test(text)) return text;
     var range = "";
@@ -952,8 +996,8 @@ export default function (pi: ExtensionAPI) {
     }
     return text + "\n\nNOTE: no records were returned" + range +
       ". Nothing was recorded in that window; this does NOT mean the account has no data. " +
-      "Do not summarise or estimate values from an empty result. Either widen the range and " +
-      "call again, or say plainly that nothing was recorded for that period.";
+      "Do not summarise or estimate values from an empty result. Say plainly that nothing " +
+      "was recorded for that period, and stop. Do not retry the same tool.";
   }
 
   function slim(schema: Record<string, unknown> | undefined): Record<string, unknown> {
@@ -1003,7 +1047,7 @@ Today is \${TODAY}. Unless the user names a period, use a recent range ending no
           try {
             const fixed = repairRange(params as Record<string, any>);
             const raw = await call(t.name, fixed, signal);
-            return { content: [{ type: "text", text: annotate(raw, fixed) }],
+            return { content: [{ type: "text", text: annotate(reduceResult(raw), fixed) }],
                      details: { server: NAME, tool: t.name } };
           } finally { ctx.ui.setStatus(\`mcp-\${NAME}\`, undefined); }
         },
