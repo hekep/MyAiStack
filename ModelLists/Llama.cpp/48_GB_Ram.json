@@ -27,7 +27,9 @@
     {"tag": "mradermacher/II-Medical-8B-GGUF:Q8_0", "size_gb": 9, "description": "II-Medical 8B @ Q8_0 — medical reasoning"},
     {"tag": "bartowski/OpenBioLLM-Llama3-8B-GGUF:Q8_0", "size_gb": 9, "description": "OpenBioLLM 8B @ Q8_0 — biomedical"},
     {"tag": "RyanGichuru254/PsyLLM-8B-GGUF:Q8_0", "size_gb": 9, "description": "PsyLLM 8B @ Q8_0 — psychology dialogue"},
+    {"tag": "mradermacher/Qwen3-8B-MedReasonPath-GGUF:Q8_0", "size_gb": 9, "description": "Qwen3-8B MedReasonPath @ Q8_0 — medical reasoning, TOOL CALLING"},
     {"tag": "MaziyarPanahi/BioMistral-7B-GGUF:Q8_0", "size_gb": 8, "description": "BioMistral 7B @ Q8_0 — PubMed-tuned"},
+    {"tag": "mradermacher/Meissa-4B-GGUF:Q8_0", "size_gb": 5, "description": "Meissa 4B @ Q8_0 — medical, TOOL CALLING, smallest"},
     {"tag": "unsloth/medgemma-4b-it-GGUF:Q8_0", "size_gb": 4, "description": "MedGemma 4B @ Q8_0 — Google medical multimodal, near-lossless"}
   ]
 }
