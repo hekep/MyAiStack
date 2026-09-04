@@ -1143,9 +1143,37 @@ Today is \${TODAY} in timezone \${TZ}. Recent days: \${RECENT_DAYS}. Use that li
     return n;
   }
 
+  /**
+   * Agentic models trained with reinforcement learning often end a turn by
+   * calling a terminal action. ATHENA-R1 calls "finish"; with no such tool it
+   * gets "Tool finish not found", restates its whole answer, calls finish
+   * again, and loops — four identical paragraphs before the user gave up.
+   *
+   * Registering it costs one tool and ends the loop properly: terminate tells
+   * Pi to stop after this batch, which is what the model was asking for. Only
+   * registered when nothing else provides it, so two connectors cannot clash.
+   */
+  function registerFinish(): void {
+    try {
+      if (pi.getAllTools().some((x: any) => x.name === "finish")) return;
+    } catch { /* older Pi without getAllTools: register anyway */ }
+    if (registered.has("finish")) return;
+    registered.add("finish");
+    pi.registerTool({
+      name: "finish",
+      label: "Finish",
+      description: "End the turn. Call this when you have answered and need no more tools.",
+      parameters: Type.Unsafe<Record<string, unknown>>({ type: "object", properties: {} }),
+      async execute() {
+        return { content: [{ type: "text", text: "Done." }], details: {}, terminate: true };
+      },
+    });
+  }
+
   pi.on("session_start", async (_e, ctx) => {
     try {
       const { tools } = JSON.parse(readFileSync(\`\${DIR}/tools.json\`, "utf8")) as { tools: McpTool[] };
+      registerFinish();
       ctx.ui.notify(\`\${LABEL}: \${register(tools)} MCP tools ready — /mcp-\${NAME} for status\`, "info");
     } catch (e: any) {
       ctx.ui.notify(\`\${LABEL}: \${e.message} — run: aistackMcpBuild \${NAME}\`, "warning");
