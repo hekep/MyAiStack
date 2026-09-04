@@ -423,6 +423,13 @@ mlxmlListInstalled() {
     if [ -d "$MLX_HF_CACHE" ]; then
         for d in "$MLX_HF_CACHE"/models--*; do
             [ -d "$d" ] || continue
+            # HuggingFace creates the cache entry before the first byte arrives
+            # and leaves blobs/<hash>.<etag>.incomplete behind until each file is
+            # whole. Listing one of those offers a model that cannot load — the
+            # same trap the llama.cpp side avoids with its .part naming.
+            if find "$d" -name '*.incomplete' -print -quit 2>/dev/null | grep -q .; then
+                continue
+            fi
             b=$(basename "$d")
             printf '%s\n' "$(printf '%s' "${b#models--}" | sed 's|--|/|')"
         done
@@ -436,6 +443,21 @@ mlxmlListInstalled() {
             printf '%s\n' "$d"
         done
     fi
+}
+
+# MLX models still downloading, as "repo<TAB>bytes-so-far". A partial download
+# holds real disk and is deliberately invisible to the model list, so it is
+# reported instead of silently accumulating.
+mlxmlListPartial() {
+    [ -d "$MLX_HF_CACHE" ] || return 0
+    local d b
+    for d in "$MLX_HF_CACHE"/models--*; do
+        [ -d "$d" ] || continue
+        find "$d" -name '*.incomplete' -print -quit 2>/dev/null | grep -q . || continue
+        b=$(basename "$d")
+        printf '%s\t%s\n' "$(printf '%s' "${b#models--}" | sed 's|--|/|')" \
+                            "$(du -sk "$d" 2>/dev/null | cut -f1)"
+    done
 }
 # List Ollama model tags, one per line.
 # Falls back to reading ~/.ollama manifests when the daemon is down: the models
