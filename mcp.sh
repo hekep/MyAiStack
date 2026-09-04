@@ -922,6 +922,40 @@ export default function (pi: ExtensionAPI) {
    * can follow. The server still validates, and the required format is stated in
    * prose in the description, so nothing is lost but tokens.
    */
+  /**
+   * Widen a range the model collapsed to a point. Asked for "today" a model
+   * will often send the same timestamp as both bounds, which is a zero-length
+   * window and returns nothing — observed on every one of seven tools in a row,
+   * after which the model invented a summary from the empty results.
+   */
+  function repairRange(args: Record<string, any>): Record<string, any> {
+    const a = { ...args };
+    const s = a.start_date, e = a.end_date;
+    if (typeof s === "string" && typeof e === "string" && s >= e) {
+      const day = s.slice(0, 10);
+      a.start_date = day + "T00:00:00Z";
+      a.end_date = day + "T23:59:59Z";
+    }
+    return a;
+  }
+
+  /**
+   * Say what an empty result means. {"data":[]} reads as "you have no data",
+   * which is a different claim from "nothing was recorded in the window you
+   * asked about" — and the model cannot tell them apart without being told.
+   */
+  function annotate(text: string, args: Record<string, any>): string {
+    if (!/"data"\s*:\s*\[\s*\]/.test(text)) return text;
+    var range = "";
+    if (args.start_date && args.end_date) {
+      range = " for " + args.start_date + " to " + args.end_date;
+    }
+    return text + "\n\nNOTE: no records were returned" + range +
+      ". Nothing was recorded in that window; this does NOT mean the account has no data. " +
+      "Do not summarise or estimate values from an empty result. Either widen the range and " +
+      "call again, or say plainly that nothing was recorded for that period.";
+  }
+
   function slim(schema: Record<string, unknown> | undefined): Record<string, unknown> {
     const s = JSON.parse(JSON.stringify(schema ?? { type: "object", properties: {} }));
     delete s.\$schema;
@@ -955,7 +989,7 @@ export default function (pi: ExtensionAPI) {
           description: hasDates(t)
             ? \`\${t.description ?? t.name}
 
-Today is \${TODAY}. Unless the user names a period, use a recent range ending now. Timestamps must be full ISO 8601 with a Z suffix, for example \${TODAY}T00:00:00Z — a bare date is rejected.\`
+Today is \${TODAY}. Unless the user names a period, use a recent range ending now. start_date must be strictly BEFORE end_date — for a single day use T00:00:00Z to T23:59:59Z, never the same timestamp twice. Timestamps must be full ISO 8601 with a Z suffix, for example \${TODAY}T00:00:00Z — a bare date is rejected.\`
             : (t.description ?? t.name),
         promptSnippet: \`\${t.name} — \${LABEL} data over MCP\`,
           promptGuidelines: [
@@ -967,7 +1001,9 @@ Today is \${TODAY}. Unless the user names a period, use a recent range ending no
         async execute(_id, params, signal, _onUpdate, ctx: ExtensionContext) {
           ctx.ui.setStatus(\`mcp-\${NAME}\`, \`\${LABEL}: \${t.name}…\`);
           try {
-            return { content: [{ type: "text", text: await call(t.name, params, signal) }],
+            const fixed = repairRange(params as Record<string, any>);
+            const raw = await call(t.name, fixed, signal);
+            return { content: [{ type: "text", text: annotate(raw, fixed) }],
                      details: { server: NAME, tool: t.name } };
           } finally { ctx.ui.setStatus(\`mcp-\${NAME}\`, undefined); }
         },
@@ -1014,6 +1050,13 @@ PIEOF
 # and catch that whole class of damage at the moment it is written.
 _aiStackMcpCheckGenerated() {
     local f="$1" bad=0
+    # a backtick in the template is command substitution inside the unquoted
+    # heredoc, so shell error text can land in the middle of the TypeScript
+    if grep -qE 'command not found|No such file or directory' "$f"; then
+        fail "Generated file contains shell error output — a backtick was executed:"
+        grep -nE 'command not found|No such file or directory' "$f" | head -3 | sed 's/^/         /' >&2
+        bad=1
+    fi
     if grep -qE '\.[[:space:]]*;' "$f"; then
         fail "Generated file has an empty property access — a shell variable was expanded:"
         grep -nE '\.[[:space:]]*;' "$f" | head -3 | sed 's/^/         /' >&2
