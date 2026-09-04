@@ -347,6 +347,7 @@ _aiStackAptTool() {
 # all in parallel, cached for a day — first run ~2 s, reruns instant. A tag
 # containing "/" is a HuggingFace repo (llama.cpp GGUF); otherwise it is an
 # Ollama registry tag.
+TAG_CHECK_DEADLINE="${TAG_CHECK_DEADLINE:-20}"
 TAG_CACHE_DIR="$HOME/.cache/ollama-tag-check"
 # Path of the cache entry for one model tag's availability probe.
 # Args: <tag>. Slashes and colons become underscores so any tag is a filename.
@@ -370,9 +371,52 @@ tag_check_prefetch() {   # probe one tag and cache the HTTP status
         */*) url="https://huggingface.co/api/models/${name#hf.co/}" ;;   # HF repo: llama.cpp GGUF
         *)   url="https://registry.ollama.ai/v2/library/${name}/manifests/${t}" ;;
     esac
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$url" 2>/dev/null)
+    code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 8 "$url" 2>/dev/null)
     echo "${code:-000}" > "$f"
 }
+# Probe a whole menu's tags in parallel, under a hard deadline. Args: <tag>...
+# curl's own --max-time bounds a transfer, but not a name lookup that never
+# returns: on a flaky or captive network the resolver can outlive it, and a bare
+# "wait" then blocks the installer with no way out but Ctrl-C. Stragglers are
+# killed when the deadline passes and their tags are simply left unverified,
+# which tag_available already treats as available — the model is offered and, at
+# worst, fails at download. Interrupting only abandons the check, not the wizard.
+_tagVerifyAll() {
+    [ $# -ge 1 ] || return 0
+    local pids=() pid tag waited=0 alive skipped=0
+    trap 'skipped=1' INT
+    for tag in "$@"; do
+        tag_check_prefetch "$tag" &
+        pids+=($!)
+    done
+    while [ "$waited" -lt "$TAG_CHECK_DEADLINE" ] && [ "$skipped" = "0" ]; do
+        alive=0
+        for pid in "${pids[@]}"; do kill -0 "$pid" 2>/dev/null && { alive=1; break; }; done
+        [ "$alive" = "0" ] && break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    trap - INT
+    local stuck=0
+    for pid in "${pids[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            stuck=$((stuck + 1))
+            # reap each one individually with stderr closed: bash announces
+            # "Terminated"/"Killed" for a job it reaps, and that noise would
+            # look like a failure in the middle of an install
+            { pkill -P "$pid"; kill -9 "$pid"; wait "$pid"; } 2>/dev/null
+        fi
+    done
+    { wait; } 2>/dev/null
+    if [ "$skipped" = "1" ]; then
+        warn "Upstream check skipped — every candidate is offered unverified."
+    elif [ "$stuck" -gt 0 ]; then
+        warn "${stuck} probe(s) did not answer within ${TAG_CHECK_DEADLINE}s — offered unverified."
+        warn "The registry may be slow or unreachable; a download would still tell you."
+    fi
+    return 0
+}
+
 # True when a probed tag exists (HTTP 200).
 # Args: <tag>. An unreachable network (000/empty) counts as available: better to
 # offer a model and fail at download than to hide everything while offline.
@@ -1512,9 +1556,8 @@ aiStackModelMenu() {
         [ "$hidden_disk" -gt 0 ] && warn "${hidden_disk} model(s) hidden — larger than the ${have_disk} GB of free disk allows."
         [ "${#menu_tags[@]}" -eq 0 ] && { ok "No further ${engine} models fit this host — done."; return 0; }
 
-        info "Verifying ${#menu_tags[@]} candidate tags upstream (parallel, cached 24 h)..."
-        for tag in "${menu_tags[@]}"; do tag_check_prefetch "$tag" & done
-        wait
+        info "Verifying ${#menu_tags[@]} candidate tags upstream (parallel, cached 24 h, ${TAG_CHECK_DEADLINE}s limit)..."
+        _tagVerifyAll "${menu_tags[@]}"
         local avail_tags=() avail_lines=() j
         for j in "${!menu_tags[@]}"; do
             if tag_available "${menu_tags[$j]}"; then
