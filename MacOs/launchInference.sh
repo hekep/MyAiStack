@@ -101,6 +101,8 @@ tune_set() {
 # ---------- engines -----------------------------------------------------------
 LLAMACPP_MODEL_DIR="${LLAMACPP_MODEL_DIR:-$HOME/Models/llama.cpp}"
 MLX_HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}/hub"
+# where convert.sh writes locally converted MLX models
+MLX_CONVERT_DIR="${MLX_CONVERT_DIR:-$HOME/Models/mlx}"
 OLLAMA_PORT=11434; LLAMACPP_PORT=8080; MLX_PORT=8081
 
 # True when llama.cpp is available (llama-server or llama-cli on PATH).
@@ -416,13 +418,24 @@ llamacppListInstalled() {
 # List MLX models in the HuggingFace cache as repo ids, one per line.
 # Reverses the cache layout (models--org--repo) into org/repo.
 mlxmlListInstalled() {
-    [ -d "$MLX_HF_CACHE" ] || return 0
     local d b
-    for d in "$MLX_HF_CACHE"/models--*; do
-        [ -d "$d" ] || continue
-        b=$(basename "$d")
-        printf '%s\n' "$(printf '%s' "${b#models--}" | sed 's|--|/|')"
-    done
+    # models pulled from HuggingFace, named models--org--repo in its cache
+    if [ -d "$MLX_HF_CACHE" ]; then
+        for d in "$MLX_HF_CACHE"/models--*; do
+            [ -d "$d" ] || continue
+            b=$(basename "$d")
+            printf '%s\n' "$(printf '%s' "${b#models--}" | sed 's|--|/|')"
+        done
+    fi
+    # models converted locally by convert.sh. mlx_lm.server takes a path just as
+    # readily as a repo id, so a converted model needs no catalogue entry and no
+    # install step — appearing in this list IS being installed.
+    if [ -d "$MLX_CONVERT_DIR" ]; then
+        for d in "$MLX_CONVERT_DIR"/*@*bit; do
+            [ -d "$d" ] || continue
+            printf '%s\n' "$d"
+        done
+    fi
 }
 # List Ollama model tags, one per line.
 # Falls back to reading ~/.ollama manifests when the daemon is down: the models
@@ -492,6 +505,10 @@ engineModelSizeGb() {
             f="${LLAMACPP_MODEL_DIR}/$(printf '%s' "$tag" | sed 's|/|__|g; s|:|@|').gguf"
             [ -e "$f" ] && du -m "$f" 2>/dev/null | awk '{printf "%d", $1/1024}' || echo 0 ;;
         MLX-LM)
+            # a locally converted model is a directory, not an HF cache entry
+            case "$model" in
+                /*) du -sk "$model" 2>/dev/null | awk '{printf "%d", ($1/1048576)+0.5}'; return 0 ;;
+            esac
             d="${MLX_HF_CACHE}/models--$(printf '%s' "$tag" | sed 's|/|--|')"
             [ -d "$d" ] && du -sm "$d" 2>/dev/null | awk '{printf "%d", $1/1024}' || echo 0 ;;
         Ollama)

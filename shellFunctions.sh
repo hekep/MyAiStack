@@ -120,7 +120,8 @@ if [ -n "$AI_STACK_OS_DIR" ]; then
 fi
 
 # MCP connectors are platform-independent — one implementation, no OS folder.
-_aiStackDefine "${AI_STACK_HOME}/mcp.sh" aistackMcp
+_aiStackDefine "${AI_STACK_HOME}/mcp.sh"     aistackMcp
+_aiStackDefine "${AI_STACK_HOME}/convert.sh" aistackConvert
 
 # Whole-script entry points, so the shell offers the same commands as the repo.
 # These run the root dispatch wrappers, which pick the right OS folder.
@@ -181,7 +182,7 @@ aistackHelp() {
         echo "  This OS has no engine/agent implementations — only the MCP connectors below."
     fi
     local group
-    for group in aistackInstall aistackUninstall aistackLaunchInference aistackModelTest aistackMcp; do
+    for group in aistackInstall aistackUninstall aistackLaunchInference aistackModelTest aistackMcp aistackConvert; do
         echo
         echo "  ${group}*"
         # $(echo ...) not $VAR: zsh does not word-split a plain parameter
