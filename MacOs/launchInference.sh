@@ -146,6 +146,42 @@ litellmKillOurs() { pkill  -f "litellm .*--port ${LITELLM_PORT}" 2>/dev/null; }
 litellm_up() { curl -sf --max-time 3 "http://127.0.0.1:${LITELLM_PORT}/health/liveliness" >/dev/null 2>&1 \
                || curl -sf --max-time 3 "http://127.0.0.1:${LITELLM_PORT}/v1/models" >/dev/null 2>&1; }
 
+# Longest context a llama.cpp model was trained for. Args: <tag>.
+# Read straight out of the GGUF header, so it costs a few kilobytes and no model
+# load. llama-server will happily accept -c far above this: it splits the request
+# across slots, allocates a KV cache for what was asked, and then every decode
+# fails with "Compute error ... ret = -3". Prints 0 when it cannot be determined.
+llamacppTrainedContext() {
+    [ $# -ge 1 ] || { echo 0; return 0; }
+    # same filename encoding the rest of this script inlines; llamacppLocalFile
+    # lives in install.sh and is not sourced here
+    local f="${LLAMACPP_MODEL_DIR}/$(printf '%s' "$1" | sed 's|/|__|g; s|:|@|').gguf"
+    [ -f "$f" ] || { echo 0; return 0; }
+    python3 - "$f" <<'PYEOF' 2>/dev/null || echo 0
+import struct, sys
+fh = open(sys.argv[1], "rb")
+magic, ver, n_tensors, n_kv = struct.unpack("<4sIQQ", fh.read(24))
+if magic != b"GGUF":
+    print(0); raise SystemExit
+def rd_str():
+    (n,) = struct.unpack("<Q", fh.read(8)); return fh.read(n).decode("utf-8", "replace")
+FMT = {0:"<B",1:"<b",2:"<H",3:"<h",4:"<I",5:"<i",6:"<f",7:"<?",10:"<Q",11:"<q",12:"<d"}
+def rd_val(t):
+    if t == 8: return rd_str()
+    if t == 9:                                   # array: read and discard
+        (et,) = struct.unpack("<I", fh.read(4)); (n,) = struct.unpack("<Q", fh.read(8))
+        for _ in range(n): rd_val(et)
+        return None
+    s = FMT[t]; return struct.unpack(s, fh.read(struct.calcsize(s)))[0]
+out = 0
+for _ in range(n_kv):
+    k = rd_str(); (t,) = struct.unpack("<I", fh.read(4)); v = rd_val(t)
+    if k.endswith(".context_length") and isinstance(v, int):
+        out = v; break
+print(out)
+PYEOF
+}
+
 # This Mac's LAN address on en0, falling back to en1 (Wi-Fi vs Ethernet).
 # Empty when offline, which the network selector treats as localhost-only.
 lan_ip() { ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null; }
@@ -603,9 +639,13 @@ aistackLaunchInferenceContextSelector() {
     limit_mb=$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)
     if [ "$limit_mb" -gt 0 ]; then gpu_gb=$(( limit_mb / 1024 )); else gpu_gb=$(( total_gb * 3 / 4 )); fi
 
-    # model's own ceiling, when the engine can tell us (Ollama can)
+    # model's own ceiling. Asking for more than this is not merely wasteful:
+    # llama-server allocates the KV cache for what was requested and then fails
+    # every decode with "Compute error ... ret = -3".
     local model_max=0
-    if [ "$engine" = "Ollama" ] && curl -sf --max-time 3 "http://127.0.0.1:${OLLAMA_PORT}/api/version" >/dev/null 2>&1; then
+    if [ "$engine" = "Llama.cpp" ]; then
+        model_max=$(llamacppTrainedContext "$model")
+    elif [ "$engine" = "Ollama" ] && curl -sf --max-time 3 "http://127.0.0.1:${OLLAMA_PORT}/api/version" >/dev/null 2>&1; then
         model_max=$(curl -sf --max-time 8 "http://127.0.0.1:${OLLAMA_PORT}/api/show" \
                     -d "{\"model\":\"${model}\"}" 2>/dev/null | python3 -c '
 import json,sys
@@ -631,8 +671,13 @@ except Exception: print(0)' 2>/dev/null)
         labels+=("$(printf '%4sK tokens   (~%d GB KV cache, ~%d GB total)' "$k" "$kv" "$need")")
     done
     if [ "${#opts[@]}" -eq 0 ]; then
-        warn "Even 32K does not fit the GPU budget — using 32768 anyway; expect swapping."
-        echo 32768; return 0
+        local floor=32768
+        # never hand back more than the model was trained for, even in the
+        # fallback: that is the case that fails to decode rather than clamping
+        [ "$model_max" -gt 0 ] && [ "$model_max" -lt "$floor" ] && floor="$model_max"
+        warn "Even ${floor} tokens is tight for the GPU budget — using it anyway; expect swapping."
+        tune_set "CTX_${engine}" "$floor"
+        echo "$floor"; return 0
     fi
 
     if [ "${#opts[@]}" -eq 1 ]; then
@@ -643,6 +688,13 @@ except Exception: print(0)' 2>/dev/null)
 
     local i=1 defnum=1 j=1 prev
     prev=$(tune_get "CTX_${engine}"); prev="${prev:-131072}"
+    # A remembered context belongs to whichever model was running when it was
+    # saved. Applied to a model with a smaller ceiling it is not merely a bad
+    # default: llama-server allocates for it and then fails every decode.
+    if [ "$model_max" -gt 0 ] && [ "$prev" -gt "$model_max" ]; then
+        warn "Saved default $(( prev / 1024 ))K is above this model's $(( model_max / 1024 ))K ceiling — capping."
+        prev="$model_max"
+    fi
     for i in "${!opts[@]}"; do
         [ "${opts[$i]}" = "$prev" ] && defnum=$(( i + 1 ))
     done
