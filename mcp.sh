@@ -912,6 +912,13 @@ function call(tool: string, args: unknown, signal?: AbortSignal): Promise<string
 
 export default function (pi: ExtensionAPI) {
   const registered = new Set<string>();
+  const TODAY = new Date().toISOString().slice(0, 10);
+
+  /** True when a tool takes a date-like parameter, and so must be told the date. */
+  function hasDates(t: McpTool): boolean {
+    const props = ((t.inputSchema ?? {}) as any).properties ?? {};
+    return Object.keys(props).some((k) => /date|time|start|end|since|until/i.test(k));
+  }
 
   function register(tools: McpTool[]): number {
     let n = 0;
@@ -921,8 +928,20 @@ export default function (pi: ExtensionAPI) {
       pi.registerTool({
         name: t.name,
         label: \`\${LABEL}: \${t.name}\`,
-        description: t.description ?? t.name,
+          // The model has no clock. Left to itself it invents a plausible date —
+          // observed asking for 2023-04-01 against data recorded in 2026, which
+          // returns an empty set that reads as "no data" rather than "wrong year".
+          // TODAY is computed when tools register, so it is always the real one.
+          description: hasDates(t)
+            ? \`\${t.description ?? t.name}
+
+Today is \${TODAY}. Unless the user names a period, use a recent range ending now. Timestamps must be full ISO 8601 with a Z suffix, for example \${TODAY}T00:00:00Z — a bare date is rejected.\`
+            : (t.description ?? t.name),
         promptSnippet: \`\${t.name} — \${LABEL} data over MCP\`,
+          promptGuidelines: [
+            \`Today is \${TODAY}. \${LABEL} tools need ISO 8601 timestamps with a Z suffix, never a bare date.\`,
+            \`For totals or averages prefer a single summary call over several raw-sample calls.\`,
+          ],
         parameters: Type.Unsafe<Record<string, unknown>>(t.inputSchema ?? { type: "object", properties: {} }),
         executionMode: "sequential",
         async execute(_id, params, signal, _onUpdate, ctx: ExtensionContext) {
