@@ -924,10 +924,10 @@ export default function (pi: ExtensionAPI) {
    */
   function slim(schema: Record<string, unknown> | undefined): Record<string, unknown> {
     const s = JSON.parse(JSON.stringify(schema ?? { type: "object", properties: {} }));
-    delete s.$schema;
+    delete s.\$schema;
     for (const v of Object.values((s.properties ?? {}) as Record<string, any>)) {
       delete v.pattern;
-      delete v.$schema;
+      delete v.\$schema;
       if (typeof v.description === "string" && v.description.length > 200) {
         v.description = v.description.slice(0, 200) + "…";
       }
@@ -1002,7 +1002,39 @@ Today is \${TODAY}. Unless the user names a period, use a recent range ending no
   });
 }
 PIEOF
+    _aiStackMcpCheckGenerated "$dir/pi-extension.ts" || return 1
     ok "Pi extension written: ${dir}/pi-extension.ts"
+}
+
+# Refuse to report a generated file as written when it cannot parse. Args: <file>.
+# The extension is emitted from an unquoted heredoc so ${NAME} interpolates,
+# which means an unescaped $ in the TypeScript is expanded by the shell instead:
+# "delete s.$schema" became "delete s.;" and Pi failed to load the extension at
+# startup, long after the build had reported success. These two checks are cheap
+# and catch that whole class of damage at the moment it is written.
+_aiStackMcpCheckGenerated() {
+    local f="$1" bad=0
+    if grep -qE '\.[[:space:]]*;' "$f"; then
+        fail "Generated file has an empty property access — a shell variable was expanded:"
+        grep -nE '\.[[:space:]]*;' "$f" | head -3 | sed 's/^/         /' >&2
+        bad=1
+    fi
+    python3 -c '
+import sys
+src = open(sys.argv[1]).read()
+d = p = b = 0; inT = False
+for i, c in enumerate(src):
+    if c == chr(96) and (i == 0 or src[i-1] != chr(92)): inT = not inT
+    if inT: continue
+    d += c == "{"; d -= c == "}"
+    p += c == "("; p -= c == ")"
+    b += c == "["; b -= c == "]"
+bad = [n for n, v in (("braces", d), ("parens", p), ("brackets", b)) if v]
+if inT: bad.append("unclosed template literal")
+if bad: sys.exit("unbalanced: " + ", ".join(bad))
+' "$f" || bad=1
+    [ "$bad" = "0" ] || { fail "Refusing to call ${f} written — it will not load."; return 1; }
+    return 0
 }
 
 # Write one OpenCode tool file per MCP tool. Args: <name>.
