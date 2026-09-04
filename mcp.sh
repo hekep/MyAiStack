@@ -948,6 +948,31 @@ export default function (pi: ExtensionAPI) {
    * window and returns nothing — observed on every one of seven tools in a row,
    * after which the model invented a summary from the empty results.
    */
+  /** Milliseconds the given zone is ahead of UTC at that instant. */
+  function zoneOffsetMs(at: Date, tz: string): number {
+    const f = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour12: false,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const p: any = {};
+    for (const part of f.formatToParts(at)) p[part.type] = part.value;
+    const asUtc = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second);
+    return asUtc - at.getTime();
+  }
+
+  /**
+   * Read a timestamp as a wall clock in the user's zone and return the real
+   * UTC instant. Asked for "5pm" the model sends "T17:00:00Z", which is 5pm in
+   * London, not in Helsinki — it queried 20:00 local and found nothing while the
+   * data sat at 14:00Z. Doing the subtraction here means the model never has to.
+   */
+  function wallClockToUtc(s: string, tz: string): string {
+    const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)/.exec(s);
+    if (!m) return s;
+    const guess = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+    const off = zoneOffsetMs(new Date(guess), tz);
+    return new Date(guess - off).toISOString().replace(/\.\d{3}Z$/, "Z");
+  }
+
   function repairRange(args: Record<string, any>, ACCEPTS_TZ: boolean): Record<string, any> {
     const a = { ...args };
     const s = a.start_date, e = a.end_date;
@@ -960,6 +985,14 @@ export default function (pi: ExtensionAPI) {
     // host that shifts every "day" by three hours, so a morning reading lands
     // on the wrong date. The model has no reason to know the host timezone.
     if (a.timezone === undefined && ACCEPTS_TZ) a.timezone = TZ;
+    // A tool that takes a timezone gets one (above) and the server does the
+    // work. A tool that does not needs UTC, and the model demonstrably sends
+    // the user's wall clock with a Z stuck on the end, so convert it here.
+    if (!ACCEPTS_TZ && TZ !== "UTC") {
+      for (const k of ["start_date", "end_date"]) {
+        if (typeof a[k] === "string") a[k] = wallClockToUtc(a[k], TZ);
+      }
+    }
     return a;
   }
 
@@ -1085,7 +1118,7 @@ export default function (pi: ExtensionAPI) {
           description: hasDates(t)
             ? \`\${t.description ?? t.name}
 
-Today is \${TODAY} in timezone \${TZ}. Recent days: \${RECENT_DAYS}. Use that list rather than working out weekdays yourself. Unless the user names a period, use a recent range ending now. start_date must be strictly BEFORE end_date — for a single day use T00:00:00Z to T23:59:59Z, never the same timestamp twice. Timestamps must be full ISO 8601 with a Z suffix, for example \${TODAY}T00:00:00Z — a bare date is rejected.\`
+Today is \${TODAY} in timezone \${TZ}. Recent days: \${RECENT_DAYS}. Use that list rather than working out weekdays yourself. Unless the user names a period, use a recent range ending now. start_date must be strictly BEFORE end_date — for a single day use T00:00:00Z to T23:59:59Z, never the same timestamp twice. Give times as the user says them, in their local clock — MyAiStack converts to UTC, so do not shift the hours yourself. Timestamps must be full ISO 8601 with a Z suffix, for example \${TODAY}T00:00:00Z — a bare date is rejected.\`
             : (t.description ?? t.name),
         promptSnippet: \`\${t.name} — \${LABEL} data over MCP\`,
           promptGuidelines: [
