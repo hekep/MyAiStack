@@ -975,6 +975,34 @@ export default function (pi: ExtensionAPI) {
    * model reports arithmetic it did not have to do — the same rule the rest of
    * this toolkit follows: measured, never estimated.
    */
+  /**
+   * Relabel day stamps in the timezone that was asked for. Aidlab returns a
+   * daily row stamped at the START of the local day expressed in UTC, so with
+   * timezone=Europe/Helsinki the Wednesday row comes back as
+   * "2026-09-01T21:00:00.000Z" — correct data under a label that reads as
+   * Tuesday. The model believed the label and reported the wrong day. A daily
+   * summary has no meaningful time component, so the calendar date replaces it.
+   */
+  function localiseDates(text: string, tz: string): string {
+    let d: any;
+    try { d = JSON.parse(text); } catch { return text; }
+    if (!d || !Array.isArray(d.data)) return text;
+    let touched = false;
+    for (const row of d.data) {
+      if (row && typeof row.date === "string" && row.date.length > 10) {
+        const local = new Date(row.date).toLocaleDateString("en-CA", { timeZone: tz });
+        if (local !== row.date.slice(0, 10)) touched = true;
+        row.date = local;
+      }
+    }
+    const out = JSON.stringify(d);
+    return touched
+      ? out + "\n\nNOTE: dates above are calendar days in " + tz +
+        ". The server stamps each day at its local start expressed in UTC, which reads " +
+        "as the previous evening; they have been relabelled to the day they describe."
+      : out;
+  }
+
   const KEEP = 5;
   function r1(n: number): number { return Math.round(n * 10) / 10; }
   function reduceResult(text: string): string {
@@ -1072,7 +1100,8 @@ Today is \${TODAY} in timezone \${TZ}. Recent days: \${RECENT_DAYS}. Use that li
             const fixed = repairRange(params as Record<string, any>,
                                       !!((t.inputSchema as any)?.properties?.timezone));
             const raw = await call(t.name, fixed, signal);
-            return { content: [{ type: "text", text: annotate(reduceResult(raw), fixed) }],
+            const shown = fixed.timezone ? localiseDates(raw, String(fixed.timezone)) : raw;
+            return { content: [{ type: "text", text: annotate(reduceResult(shown), fixed) }],
                      details: { server: NAME, tool: t.name } };
           } finally { ctx.ui.setStatus(\`mcp-\${NAME}\`, undefined); }
         },
