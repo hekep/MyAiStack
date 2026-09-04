@@ -915,6 +915,26 @@ export default function (pi: ExtensionAPI) {
   const TODAY = new Date().toISOString().slice(0, 10);
 
   /** True when a tool takes a date-like parameter, and so must be told the date. */
+  /**
+   * Strip what a model cannot use from a JSON Schema before it becomes a tool
+   * definition. Aidlab attaches a 293-character leap-year regex to every date
+   * field, twelve times over: 48% of the whole tool payload, in a form no model
+   * can follow. The server still validates, and the required format is stated in
+   * prose in the description, so nothing is lost but tokens.
+   */
+  function slim(schema: Record<string, unknown> | undefined): Record<string, unknown> {
+    const s = JSON.parse(JSON.stringify(schema ?? { type: "object", properties: {} }));
+    delete s.$schema;
+    for (const v of Object.values((s.properties ?? {}) as Record<string, any>)) {
+      delete v.pattern;
+      delete v.$schema;
+      if (typeof v.description === "string" && v.description.length > 200) {
+        v.description = v.description.slice(0, 200) + "…";
+      }
+    }
+    return s;
+  }
+
   function hasDates(t: McpTool): boolean {
     const props = ((t.inputSchema ?? {}) as any).properties ?? {};
     return Object.keys(props).some((k) => /date|time|start|end|since|until/i.test(k));
@@ -942,7 +962,7 @@ Today is \${TODAY}. Unless the user names a period, use a recent range ending no
             \`Today is \${TODAY}. \${LABEL} tools need ISO 8601 timestamps with a Z suffix, never a bare date.\`,
             \`For totals or averages prefer a single summary call over several raw-sample calls.\`,
           ],
-        parameters: Type.Unsafe<Record<string, unknown>>(t.inputSchema ?? { type: "object", properties: {} }),
+          parameters: Type.Unsafe<Record<string, unknown>>(slim(t.inputSchema)),
         executionMode: "sequential",
         async execute(_id, params, signal, _onUpdate, ctx: ExtensionContext) {
           ctx.ui.setStatus(\`mcp-\${NAME}\`, \`\${LABEL}: \${t.name}…\`);
