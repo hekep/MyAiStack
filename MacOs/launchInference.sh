@@ -1157,6 +1157,64 @@ YAML
     return 0
 }
 
+# ---------- 4d. system prompt selector ---------------------------------------
+# Choose which system prompt the coding agent runs with; prints the file path on
+# stdout, or "default" to leave the agent's own prompt alone. Args: <model>.
+# A model's system prompt should follow from what the model is: told it was "an
+# expert coding assistant operating inside pi", MedGemma reported that it was
+# running on gpt-3.5-turbo. The default follows the model name, so a medical
+# model starts with the health prompt without anyone having to remember.
+aistackLaunchInferenceSystemPromptSelector() {
+    if [ $# -lt 1 ]; then
+        aiStackUsage "aistackLaunchInferenceSystemPromptSelector <model>" \
+            "prints  : path to a SystemPrompts/*.txt file, or 'default'" \
+            "$(_hintExamples aistackLaunchInferenceSystemPromptSelector engine-model)"
+        return 2
+    fi
+    local model="$1" dir="${AI_STACK_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/SystemPrompts"
+    [ -d "$dir" ] || { echo "default"; return 0; }
+
+    local files=() names=() f
+    for f in "$dir"/*.txt; do
+        [ -e "$f" ] || continue
+        files+=("$f"); names+=("$(basename "$f" .txt)")
+    done
+    [ "${#files[@]}" -eq 0 ] && { echo "default"; return 0; }
+
+    # what this model probably wants, before anything is remembered
+    local guess="coding" i
+    case "$(printf '%s' "$model" | tr 'A-Z' 'a-z')" in
+        *medgemma*|*meditron*|*med42*|*medical*|*medreason*|*meissa*|*bio*|*psy*|*shrink*|*baichuan-m2*|*athena*)
+            guess="health" ;;
+    esac
+    local def=""
+    for i in "${!names[@]}"; do [ "${names[$i]}" = "$guess" ] && def=$(( i + 1 )); done
+    [ -z "$def" ] && def=1
+
+    echo >&2
+    echo "${BOLD}System prompt${RESET} — what this model should think it is" >&2
+    for i in "${!names[@]}"; do
+        printf '  %d) %-10s %s\n' "$(( i + 1 ))" "${names[$i]}" \
+            "$(head -1 "${files[$i]}" | cut -c1-58)" >&2
+    done
+    printf '  %d) %-10s %s\n' "$(( ${#names[@]} + 1 ))" "default" \
+        "leave the agent's own prompt untouched" >&2
+
+    local sel
+    sel=$(ask_val "Select [1-$(( ${#names[@]} + 1 ))]" "$def")
+    case "$sel" in
+        ''|*[!0-9]*) sel="$def" ;;
+    esac
+    if [ "$sel" -ge 1 ] && [ "$sel" -le "${#names[@]}" ]; then
+        tune_set "SYSPROMPT_$(printf '%s' "$model" | tr -c 'A-Za-z0-9' '_')" "${names[$(( sel - 1 ))]}"
+        ok "System prompt: ${names[$(( sel - 1 ))]}  (${files[$(( sel - 1 ))]})"
+        echo "${files[$(( sel - 1 ))]}"
+    else
+        ok "System prompt: the agent's own default."
+        echo "default"
+    fi
+}
+
 # ---------- 4b. coding agent selector ----------------------------------------
 # Choose the coding agent; prints its name, or "none", on stdout.
 # Args: <engine>. Offers only agents that are installed AND compatible with this
@@ -1753,7 +1811,14 @@ aistackLaunchInferenceAgentPi() {
     }
     info "Launching Pi in $(pwd). Pick the model inside Pi with: /models"
     echo "    (serving ${model} via ${engine} at ${endpoint})" >&2
-    pi
+    local sp="${LAUNCH_SYSPROMPT:-default}"
+    if [ "$sp" != "default" ] && [ -f "$sp" ]; then
+        echo "    (system prompt: $(basename "$sp" .txt) — ${sp})" >&2
+        pi --system-prompt "$(cat "$sp")"
+    else
+        echo "    (system prompt: Pi's own default)" >&2
+        pi
+    fi
 }
 
 # --- OpenCode: OpenAI-compatible, any engine ---------------------------------
@@ -1842,6 +1907,8 @@ aistackLaunchInference() {
         aistackLaunchInferenceStopProxy
     fi
     agent=$(aistackLaunchInferenceAgentSelector "$engine")
+    LAUNCH_SYSPROMPT=$(aistackLaunchInferenceSystemPromptSelector "$model")
+    export LAUNCH_SYSPROMPT
     aistackLaunchInferenceStartAgent "$agent" "$engine" "$model"
 }
 
