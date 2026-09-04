@@ -52,6 +52,96 @@ llama.cpp and MLX-LM are the **only** routes to Q5_K_M / Q6_K / 6bit — and on
 Debian, where MLX cannot run, llama.cpp is the only one. Which layer members
 exist on which platform is tabulated in [PlatformNotes.md](PlatformNotes.md).
 
+## MCP connectors
+
+An MCP server is a third party's data behind OAuth — a wearable, an issue
+tracker, a calendar. `mcp.sh` connects one and makes its tools available to the
+coding agents, without the stack ever holding a credential of its own.
+
+### One core, three callers
+
+Everything that reaches the network happens in one shell function. The agents do
+not speak MCP at all; they run the same command a person would.
+
+```
+shell           aistackMcpCall aidlab aidlab_list_sleep start_date=... end_date=...
+Pi              execute() -> bash -c '. mcp.sh && aistackMcpCall ...'
+OpenCode        execute() -> Bun.$`bash -c '. mcp.sh && aistackMcpCall ...'`
+                                    |
+                            _aiStackMcpRpc      <- the only place HTTP happens
+                              bearer token, refresh on expiry
+                              Mcp-Session-Id, 401 retry
+                              JSON or text/event-stream response
+```
+
+A tool call from an agent is byte-for-byte what you can type at a prompt, so the
+shell is a real test of the agent path rather than a simulation of it. That is
+the whole reason for the shape.
+
+### The lifecycle
+
+| Step | What it does |
+|---|---|
+| `aistackMcpAdd <name> --url <url>` | follows the 401 challenge to the resource metadata, then to the authorization server that actually offers registration, and registers as a public native client |
+| `aistackMcpLogin <name>` | PKCE S256, browser consent, one-shot loopback callback, tokens to `~/.aistack/mcp/<name>/tokens.json` at 0600 |
+| `aistackMcpBuild <name>` | `tools/list`, caches the schemas, and **generates a plugin per agent** |
+| `aistackMcpCall` | one `tools/call`; what the plugins run underneath |
+
+**Login must precede build.** The tool list is per account: what a server offers
+depends on who is asking and what they were granted, so a plugin generated
+before sign-in would describe somebody else's tool surface.
+
+### Credentials never enter the repo
+
+State lives in `~/.aistack/mcp/<name>/`, never in the working tree — a refresh
+token must not sit where a commit can reach it. `tokens.json` is written 0600
+through a temporary file and a rename, so a crash cannot leave a half-written
+credential. Removing a connector deletes the directory; it cannot revoke access
+upstream, and says so.
+
+### The generated plugin is a shim, and does the work a model cannot
+
+The plugin holds no HTTP code. What it does hold is everything a language model
+reliably gets wrong, computed in code at the moment tools are registered:
+
+| Injected | Why |
+|---|---|
+| today's date | a model has no clock and invents a plausible one |
+| eight days of dated weekdays | asked for "last Wednesday" it cannot derive the day, and picks a neighbour |
+| host timezone, and wall-clock to UTC conversion | "5 pm" means 5 pm where the user is, not in London |
+| a repaired date range | `start == end` is a zero-length window that returns nothing |
+| an explanation on an empty result | `{"data":[]}` reads as "you have no data", which is a different claim |
+| a `finish` tool | agentic models trained to end a turn with one loop forever without it |
+
+This is the ordinary invariant — *measured, never estimated* — pointed at what
+reaches the model. If the shell can compute something exactly, the model should
+not be guessing at it.
+
+Optional reduction (`AISTACK_MCP_MAX_RECORDS`, default off) replaces a long
+result with computed statistics. It exists for small context windows, where one
+page of samples can be a tenth of the budget; a capable model on a large window
+is better served the records themselves.
+
+### Generation is checked before it is trusted
+
+The plugin is written from an unquoted heredoc, because it interpolates the
+connector name and paths. That means a literal `$` must be escaped and a
+backtick is command substitution — both have silently corrupted generated code.
+`aistackMcpBuild` refuses to report success unless the output has no empty
+property access and balances its braces, parens, brackets and template literals.
+
+### Agent support
+
+| Agent | How | Through the common core |
+|---|---|---|
+| Pi | generated extension, attached per launch or enabled in its settings | yes |
+| OpenCode | one generated tool file per MCP tool, symlinked into its tools directory | yes |
+| Claude Code | `claude mcp add`, native, its own OAuth | no |
+
+Claude Code is the exception for the same reason it is elsewhere in this
+specification: it does its own thing, and pretending otherwise would be a lie in
+the code.
+
 ## Naming contract
 
 Every user-facing function is `aistack`-prefixed, so typing `aistack` at the
@@ -61,14 +151,19 @@ shell reveals the whole toolkit. Scripts keep plain names.
 |---|---|---|---|
 | `aistackInstall*` | install one layer member | 18 | 17 |
 | `aistackUninstall*` | remove one layer member | 19 | 18 |
-| `aistackLaunchInference*` | serve a model, attach an agent | 14 | 14 |
+| `aistackLaunchInference*` | serve a model, attach an agent, front it with a proxy | 20 | 14 |
 | `aistackModelTest*` | verify one engine + model | 15 | 15 |
+| `aistackMcp*` | connect an MCP server, generate agent plugins | 11 | — |
+| `aistackConvert*` | turn upstream weights into something an engine serves | 4 | — |
 | `aistackTestAllAiModels`, `aistackNoRole`, `aistackHelp` | whole-script entry points | 3 | 3 |
-| | **total** | **69** | **67** |
 
-The counts differ only because install and uninstall track their platform's
-layer members. `aistackHelp` prints the live list — prefer it to any number
-written down here.
+`aistackHelp` prints the live list — prefer it to any number written here.
+
+The last two families are **tools, not layers**: they are invoked deliberately
+and take no part in the install wizard. Both live in platform-independent root
+scripts (`mcp.sh`, `convert.sh`) rather than an OS folder, because nothing in
+them differs between platforms except which command opens a browser. Neither is
+registered on Debian yet.
 
 **Install and uninstall mirror each other function for function.** The one
 exception is `aistackUninstallOllamaData` (`~/.ollama`), which has no install
