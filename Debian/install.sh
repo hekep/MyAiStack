@@ -401,13 +401,16 @@ _tagVerifyAll() {
     for pid in "${pids[@]}"; do
         if kill -0 "$pid" 2>/dev/null; then
             stuck=$((stuck + 1))
-            # reap each one individually with stderr closed: bash announces
-            # "Terminated"/"Killed" for a job it reaps, and that noise would
-            # look like a failure in the middle of an install
-            { pkill -P "$pid"; kill -9 "$pid"; wait "$pid"; } 2>/dev/null
+            { pkill -P "$pid"; kill -9 "$pid"; } 2>/dev/null
         fi
+        # Reap OUR pid, one at a time, never a bare "wait". A bare wait blocks
+        # on every background job this shell owns — and by this point that
+        # includes the Ollama daemon started with "nohup ollama serve &", which
+        # never exits. That is what hung the installer here in the first place.
+        # stderr is closed because bash announces "Terminated"/"Killed" for a
+        # job it reaps, and that noise reads as a failure mid-install.
+        { wait "$pid"; } 2>/dev/null
     done
-    { wait; } 2>/dev/null
     if [ "$skipped" = "1" ]; then
         warn "Upstream check skipped — every candidate is offered unverified."
     elif [ "$stuck" -gt 0 ]; then
