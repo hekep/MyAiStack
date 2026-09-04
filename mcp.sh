@@ -912,7 +912,27 @@ function call(tool: string, args: unknown, signal?: AbortSignal): Promise<string
 
 export default function (pi: ExtensionAPI) {
   const registered = new Set<string>();
-  const TODAY = new Date().toISOString().slice(0, 10);
+  const NOW = new Date();
+  const TODAY = NOW.toISOString().slice(0, 10);
+  // The host timezone, not UTC. Aidlab bounds a calendar day by it, and the
+  // user asking about "Wednesday" means their Wednesday.
+  const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  /**
+   * A dated list of the last eight days with their weekday names. Asked about
+   * "last Wednesday" from a bare date, a small model has to work out the day of
+   * the week and gets it wrong — observed picking 2026-09-01, a Tuesday. Given
+   * the mapping it has nothing to compute.
+   */
+  const RECENT_DAYS = (() => {
+    const out: string[] = [];
+    for (let i = 0; i <= 7; i++) {
+      const d = new Date(NOW.getTime() - i * 86400000);
+      const name = d.toLocaleDateString("en-GB", { weekday: "long", timeZone: TZ });
+      const iso = d.toISOString().slice(0, 10);
+      out.push(name + " " + iso + (i === 0 ? " (today)" : i === 1 ? " (yesterday)" : ""));
+    }
+    return out.join(", ");
+  })();
 
   /** True when a tool takes a date-like parameter, and so must be told the date. */
   /**
@@ -928,7 +948,7 @@ export default function (pi: ExtensionAPI) {
    * window and returns nothing — observed on every one of seven tools in a row,
    * after which the model invented a summary from the empty results.
    */
-  function repairRange(args: Record<string, any>): Record<string, any> {
+  function repairRange(args: Record<string, any>, ACCEPTS_TZ: boolean): Record<string, any> {
     const a = { ...args };
     const s = a.start_date, e = a.end_date;
     if (typeof s === "string" && typeof e === "string" && s >= e) {
@@ -936,6 +956,10 @@ export default function (pi: ExtensionAPI) {
       a.start_date = day + "T00:00:00Z";
       a.end_date = day + "T23:59:59Z";
     }
+    // Aidlab bounds a calendar day by this and defaults to UTC. On a +03:00
+    // host that shifts every "day" by three hours, so a morning reading lands
+    // on the wrong date. The model has no reason to know the host timezone.
+    if (a.timezone === undefined && ACCEPTS_TZ) a.timezone = TZ;
     return a;
   }
 
@@ -1033,11 +1057,11 @@ export default function (pi: ExtensionAPI) {
           description: hasDates(t)
             ? \`\${t.description ?? t.name}
 
-Today is \${TODAY}. Unless the user names a period, use a recent range ending now. start_date must be strictly BEFORE end_date — for a single day use T00:00:00Z to T23:59:59Z, never the same timestamp twice. Timestamps must be full ISO 8601 with a Z suffix, for example \${TODAY}T00:00:00Z — a bare date is rejected.\`
+Today is \${TODAY} in timezone \${TZ}. Recent days: \${RECENT_DAYS}. Use that list rather than working out weekdays yourself. Unless the user names a period, use a recent range ending now. start_date must be strictly BEFORE end_date — for a single day use T00:00:00Z to T23:59:59Z, never the same timestamp twice. Timestamps must be full ISO 8601 with a Z suffix, for example \${TODAY}T00:00:00Z — a bare date is rejected.\`
             : (t.description ?? t.name),
         promptSnippet: \`\${t.name} — \${LABEL} data over MCP\`,
           promptGuidelines: [
-            \`Today is \${TODAY}. \${LABEL} tools need ISO 8601 timestamps with a Z suffix, never a bare date.\`,
+            \`Today is \${TODAY} (\${TZ}). \${RECENT_DAYS}. Use these dates directly; do not work out weekdays yourself.\`,
             \`For totals or averages prefer a single summary call over several raw-sample calls.\`,
           ],
           parameters: Type.Unsafe<Record<string, unknown>>(slim(t.inputSchema)),
@@ -1045,7 +1069,8 @@ Today is \${TODAY}. Unless the user names a period, use a recent range ending no
         async execute(_id, params, signal, _onUpdate, ctx: ExtensionContext) {
           ctx.ui.setStatus(\`mcp-\${NAME}\`, \`\${LABEL}: \${t.name}…\`);
           try {
-            const fixed = repairRange(params as Record<string, any>);
+            const fixed = repairRange(params as Record<string, any>,
+                                      !!((t.inputSchema as any)?.properties?.timezone));
             const raw = await call(t.name, fixed, signal);
             return { content: [{ type: "text", text: annotate(reduceResult(raw), fixed) }],
                      details: { server: NAME, tool: t.name } };
