@@ -7,8 +7,14 @@ contract they all implement.
 ## Purpose
 
 Run capable coding models locally — on Apple Silicon macOS and on Debian/Ubuntu
-— with every choice explicit and reversible. The stack is assembled from four independent layers, and the
-user is never asked a question the machine can answer for itself.
+— with every choice explicit and reversible. The stack is assembled from four
+independent layers, and the user is never asked a question the machine can
+answer for itself.
+
+Alongside the layers sit **tools**: MCP connectors, model conversion, the
+monitoring proxy. They are invoked deliberately rather than by the install
+wizard, and are documented here because they are part of the contract even
+though nothing depends on them.
 
 ## The four layers
 
@@ -142,6 +148,111 @@ Claude Code is the exception for the same reason it is elsewhere in this
 specification: it does its own thing, and pretending otherwise would be a lie in
 the code.
 
+## What a launch does
+
+`aistackLaunchInference` asks a fixed sequence of questions, each skipped when
+the machine can answer it. Two steps in that sequence are worth stating as
+contract rather than behaviour.
+
+### Reuse before teardown
+
+Before anything is freed or killed, the launcher checks whether the model asked
+for is **already serving**: the advertised model id, the served context, and the
+address it answers on must all match. On a match nothing is restarted — the
+model stays resident and the session continues to the agent.
+
+This is not only an optimisation. The memory gate runs against free memory, and
+a resident model is holding the memory it needs, so an exact relaunch could
+otherwise be refused for lack of room it had itself taken.
+
+### Context is capped by the model, not by the budget
+
+A remembered context belongs to the model that was running when it was saved.
+Applied to a smaller model, llama-server accepts the flag, allocates a KV cache
+for it, and then fails **every** decode with `ret = -3`.
+
+So the ceiling is read from the model itself: `<arch>.context_length` out of the
+GGUF header for llama.cpp, `/api/show` for Ollama. The menu, the remembered
+default and the fallback all respect it.
+
+## The monitoring proxy
+
+LiteLLM can sit in front of an engine, and the launcher offers it after the
+engine is up — it has to, because the proxy's config needs the model id the
+engine actually advertises.
+
+| | |
+|---|---|
+| port | 4000 (`LITELLM_PORT`) |
+| config | `~/.aistack/litellm.yaml`, rewritten every launch |
+| request log | `~/.aistack/litellm-requests.jsonl` |
+| read it with | `aistackLaunchInferenceProxyLog [count \| full \| remove]` |
+
+**Enter always means no, and the answer is not remembered.** Every other choice
+in the launcher describes the model you want; this one inserts a component in
+front of it, and inheriting that from a previous session is how a proxy ends up
+in a stack nobody meant to have one in.
+
+Both answers act. Yes restarts our proxy with a freshly generated config; no
+stops one that is already running — otherwise a stale proxy survives, and on the
+reuse path nothing else would stop it.
+
+The log is the point of the feature, and it does not come for free: LiteLLM's
+own output is an access line and nothing more. A generated callback records one
+JSON object per call — the messages sent, the tools offered, the reply, token
+counts. Diagnosing what a model was actually given is otherwise guesswork.
+
+Process matching is by **port**, the same rule llama-server needs: a proxy on the
+port that is not ours belongs to the user and is reported, never killed.
+
+## System prompts
+
+`SystemPrompts/<genre>.txt`, one file per genre, offered as a numbered menu
+before the agent starts. The menu is built by listing the directory, so adding a
+genre is adding a file.
+
+A model's system prompt should follow from what the model is. Told it was "an
+expert coding assistant operating inside pi", MedGemma reported that it was
+running on gpt-3.5-turbo. The default therefore follows the model name — medical
+and psychology models start on `health`, everything else on `coding` — and the
+choice is remembered per model.
+
+Ships with `coding`, `general` and `health`. `health` spends most of its length
+on constraints rather than expertise: the model must not do arithmetic, because
+the figures are computed before they reach it, and "not recorded" is never zero.
+
+Only Pi is wired to it (`--system-prompt`). OpenCode and Claude Code run their
+own defaults.
+
+## Converting a model
+
+The catalogues can only list a model somebody else has already quantised, which
+excludes every new or obscure one. `convert.sh` closes that gap.
+
+| Function | Does |
+|---|---|
+| `aistackConvertProbe <repo>` | reads config.json and the file tree — a few kilobytes, nothing downloaded — and reports architecture, real weight size, whether the chat template can call tools, and what each route would cost |
+| `aistackConvertMlx <repo> [bits]` | `mlx_lm.convert`, 8 bits by default, into `~/Models/mlx/<org>__<repo>@<bits>bit` |
+| `aistackConvertList` / `Remove` | what exists locally, and its removal |
+
+**There is no install step, by design.** `mlx_lm.server` takes a directory as
+readily as a repo id, so a converted model appears in the launcher's list the
+moment it exists. The filename is the interface — the same rule the llama.cpp
+side follows, where a `.gguf` in the models directory is an installed model
+whether or not any catalogue mentions it.
+
+Eight bits is the default because quantisation degrades structured output before
+prose, and a malformed tool call is a hard failure rather than a slightly worse
+sentence.
+
+Conversion is a **tool, not a layer**: a GPU-bound job of several minutes has no
+place inside a wizard meant to be re-runnable.
+
+A partial download must never look installed. HuggingFace creates its cache
+directory before the first byte arrives, so an entry with any
+`blobs/*.incomplete` is excluded from the model list and reported separately —
+the counterpart of the llama.cpp `.gguf.part` naming.
+
 ## Naming contract
 
 Every user-facing function is `aistack`-prefixed, so typing `aistack` at the
@@ -272,6 +383,12 @@ Two deliberate refusals, both load-bearing:
 | `LLAMACPP_PREFIX` / `LLAMACPP_BINDIR` | where the engine is unpacked and linked (default `~/.local/opt/llama.cpp`, `~/.local/bin`) | Debian |
 | `LLAMACPP_NGL` / `LLAMACPP_THREADS` | override the backend-derived `-ngl` / `-t` passed to llama-server | Debian |
 | `OLLAMA_MODELS` | which of Linux's two model stores to use | Debian |
+| `LITELLM_PORT` / `LITELLM_CONFIG` | proxy port (4000) and its generated config | macOS |
+| `AISTACK_PROXY_LOG` | where the proxy records requests | macOS |
+| `AISTACK_MCP_MAX_RECORDS` | summarise a tool result above N records; 0 (default) hands back the server's response verbatim | both |
+| `MCP_CALLBACK_PORT` | OAuth loopback port (49999) — must match what was registered | both |
+| `MLX_CONVERT_DIR` | where converted models are written (default `~/Models/mlx`) | macOS |
+| `TAG_CHECK_DEADLINE` | seconds the upstream tag check may take before giving up (20) | both |
 
 Per-user choices persist in `~/.aistackLaunchInference.conf` and become the next
 run's defaults — the same file and keys on both platforms.
@@ -295,10 +412,32 @@ Hard-won, and cheap to re-break. These are the macOS-side traps; the Linux ones
 - **bash expands every `local` argument before assigning any**, so
   `local a="$1" b="${a%:*}"` silently leaves `b` empty — or picks up the
   caller's variable, which is worse.
-- **Engines clamp context silently.** A model trained for 32K accepts `-c 524288`
-  and serves 32K, having allocated KV cache for the request. Only Ollama can be
-  asked its ceiling in advance (`/api/show`), so the launcher reports what is
-  actually served and flags the gap.
+- **Asking for more context than a model was trained for is fatal, not merely
+  wasteful.** llama-server accepts `-c 524288` on a model trained for 40960,
+  splits it across slots, allocates the KV cache, and then fails every decode
+  with `llama_decode: ret = -3` — surfacing as a 500 from whatever sits in front.
+  The ceiling is read from the GGUF header before the menu is built.
+- **A remembered setting belongs to the model that was running when it was
+  saved.** `CTX_<engine>` carried 512K from a 262144-token model to an 8B
+  trained for 40960. Anything remembered per engine must be re-validated against
+  the model actually chosen.
 - **Two big models resident at once will take the machine down.**
 - **macOS local Time Machine snapshots pin freed disk**, so cleanup can look
   ineffective until they are deleted.
+- **A bare `wait` waits for every background job the shell owns**, and by the
+  time the model menu runs one of those is the Ollama daemon, which never exits.
+  Wait on specific PIDs.
+- **GGUF publishers disagree on the delimiter before the quant.** bartowski
+  writes `repo-Q8_0.gguf`, mradermacher writes `repo.Q8_0.gguf`. A loose match
+  also finds `mmproj-Q8_0.gguf`, the vision projector — a tenth of the size,
+  which downloads happily and cannot load.
+- **A model still downloading must never look installed.** HuggingFace creates
+  its cache directory before the first byte; the marker is
+  `blobs/*.incomplete`, and llama.cpp's equivalent is the `.gguf.part` naming.
+- **Generated code written from an unquoted heredoc is shell-expanded.** A
+  literal `$` becomes a variable and a backtick becomes command substitution.
+  Both have silently corrupted a generated file that then failed to load hours
+  later; generation is checked before it is reported as written.
+- **`--jinja` did not improve llama.cpp tool calling here** — it produced bare
+  dates where the default produced correct ISO timestamps. Measured, not
+  assumed, and the launcher deliberately does not pass it.
