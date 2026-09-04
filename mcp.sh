@@ -1036,9 +1036,18 @@ export default function (pi: ExtensionAPI) {
       : out;
   }
 
-  const KEEP = 5;
+  /**
+   * How many records to keep before summarising. 0 hands the model exactly what
+   * the server returned. Raw is the default: a capable model reads the records
+   * itself and nothing is lost to a summary it did not ask for. Summarising
+   * exists for small contexts — one page of HRV is about 3100 tokens, and five
+   * such calls killed a 32K session. Set AISTACK_MCP_MAX_RECORDS to a number to
+   * turn it back on; no rebuild needed.
+   */
+  const KEEP = Number(process.env.AISTACK_MCP_MAX_RECORDS ?? "0") || 0;
   function r1(n: number): number { return Math.round(n * 10) / 10; }
   function reduceResult(text: string): string {
+    if (KEEP <= 0) return text;   // raw: the model gets the server response verbatim
     let d: any;
     try { d = JSON.parse(text); } catch { return text; }
     const arr = d && d.data;
