@@ -191,7 +191,7 @@ engine actually advertises.
 |---|---|
 | port | 4000 (`LITELLM_PORT`) |
 | config | `~/.aistack/litellm.yaml`, rewritten every launch |
-| request log | `~/.aistack/litellm-requests.jsonl` |
+| request log | one file per launch, `~/.aistack/logs/<YYYY-MM-DD_HH_MM_SS>_litellm-requests.jsonl`; `~/.aistack/litellm-requests.jsonl` is a symlink to the latest |
 | read it with | `aistackLaunchInferenceProxyLog [count \| full \| remove]` |
 
 **Enter always means no, and the answer is not remembered.** Every other choice
@@ -222,7 +222,7 @@ ATHENA-R1 was trained on, served locally over MCP.
 |---|---|
 | port | 8765 (`TOOLUNIVERSE_PORT`) — 8080 is llama.cpp, 8000 is what ATHENA gives vLLM, 5000/7000 are macOS AirPlay |
 | flags | `--compact-mode` (`TOOLUNIVERSE_ARGS`): five discovery/execute tools, the rest loaded behind them |
-| log | `~/.aistack/tooluniverse.log` |
+| log | one file per launch, `~/.aistack/logs/<YYYY-MM-DD_HH_MM_SS>_tooluniverse.log`; `~/.aistack/tooluniverse.log` is a symlink to the latest — done by the launcher's redirect, ToolUniverse is untouched |
 | connector | `tooluniverse`, registered `--no-auth` by the install step, which starts the server just long enough to build the plugins |
 
 **Installed between the agents and the models**: the plugin needs an agent to
@@ -284,7 +284,7 @@ Pi extension changes shape: the model gets **one** tool,
 `Tool_RAG(description, limit)`, the discovery tools stay hidden, the tools the
 server retrieves are registered on the spot (Pi activates newly registered
 tools itself) and their specs come back as text — the format ATHENA-R1
-learned. A call to a retrieved tool goes through `execute_tool`. `Finish` and
+learned. A call to a retrieved tool goes through `execute_tool`, and its result is capped at `AISTACK_MCP_MAX_CHARS` (16000) with a note — the one place the raw-by-default rule is narrowed, because label prose is not records. `Finish` and
 `finish` both end the turn. A server without that shape (Aidlab) gets no
 `loader.json` and the plain extension, byte for byte.
 
@@ -473,6 +473,7 @@ Two deliberate refusals, both load-bearing:
 | `TOOLUNIVERSE_TMPDIR` | where ToolUniverse keeps the embedding cache | both |
 | `AISTACK_MCP_TIMEOUT` | seconds one MCP call may take (90); the warm-up sets it to an hour | both |
 | `AISTACK_MCP_MAX_RECORDS` | summarise a tool result above N records; 0 (default) hands back the server's response verbatim | both |
+| `AISTACK_MCP_MAX_CHARS` | loader mode only: cap on a fetched tool's result (16000 characters, with a note); 0 = raw. ToolUniverse returns prose, and four raw results once made a 50K-token prompt | both |
 | `MCP_CALLBACK_PORT` | OAuth loopback port (49999) — must match what was registered | both |
 | `MLX_CONVERT_DIR` | where converted models are written (default `~/Models/mlx`) | macOS |
 | `TAG_CHECK_DEADLINE` | seconds the upstream tag check may take before giving up (20) | both |
