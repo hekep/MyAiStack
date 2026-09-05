@@ -239,13 +239,18 @@ _aistackModelRemoveMenu() {
             names+=("$m"); i=$((i+1))
         done <<< "$models"
         echo "   N) Keep the rest — stop here"
-        printf "\n%sRemove which %s model? [1-%d / N]:%s " "${BOLD}" "$engine" "${#names[@]}" "${RESET}"
-        read -r sel </dev/tty || sel="N"
-        case "$sel" in
-            [Nn]) return 1 ;;
-            *[!0-9]*|"") echo "Enter a number or N."; continue ;;
-        esac
-        if [ "$sel" -lt 1 ] || [ "$sel" -gt "${#names[@]}" ]; then echo "Out of range."; continue; fi
+        # Enter means N — keep everything; bad input re-asks here, not the whole menu.
+        local _sel_ok=0
+        while [ "$_sel_ok" -eq 0 ]; do
+        printf "\n%sRemove which %s model? [1-%d / N, Enter = N]:%s " "${BOLD}" "$engine" "${#names[@]}" "${RESET}"
+            read -r sel </dev/tty || sel="N"
+            case "$sel" in
+                ""|[Nn]) return 1 ;;
+                *[!0-9]*) echo "Enter a number or N."; continue ;;
+            esac
+            if [ "$sel" -lt 1 ] || [ "$sel" -gt "${#names[@]}" ]; then echo "Out of range (1-${#names[@]})."; continue; fi
+            _sel_ok=1
+        done
         m="${names[$((sel-1))]}"
         before=$(free_gb)
         if "$remove_fn" "$m"; then

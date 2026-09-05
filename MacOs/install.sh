@@ -1119,16 +1119,22 @@ aiStackModelMenu() {
         echo "${BOLD}${engine} models that fit this machine (~${GPU_GB} GB usable GPU, ${have_disk} GB free disk):${RESET}"
         local i
         for i in "${!menu_tags[@]}"; do printf "  %2d) %s\n" $((i+1)) "${menu_lines[$i]}"; done
-        echo "   N) No download — finish this step"
+        echo "   N) No download — finish this step (Enter)"
 
+        # Enter is the safe answer, N; anything else that is not a valid number
+        # re-asks right here — `continue` on the outer loop would re-verify
+        # every tag and reprint the menu.
         local sel
-        printf "\n%sSelect a %s model to download [1-%d / N]:%s " "${BOLD}" "$engine" "${#menu_tags[@]}" "${RESET}"
-        read -r sel </dev/tty || { echo; fail "No interactive terminal — aborting."; return 1; }
-        case "$sel" in
-            [Nn]) ok "${engine} model downloads finished."; return 0 ;;
-            *[!0-9]*|"") echo "Enter a number or N."; continue ;;
-        esac
-        if [ "$sel" -lt 1 ] || [ "$sel" -gt "${#menu_tags[@]}" ]; then echo "Out of range."; continue; fi
+        while :; do
+            printf "\n%sSelect a %s model to download [1-%d / N, Enter = N]:%s " "${BOLD}" "$engine" "${#menu_tags[@]}" "${RESET}"
+            read -r sel </dev/tty || { echo; fail "No interactive terminal — aborting."; return 1; }
+            case "$sel" in
+                ""|[Nn]) ok "${engine} model downloads finished."; return 0 ;;
+                *[!0-9]*) echo "Enter a number or N."; continue ;;
+            esac
+            if [ "$sel" -lt 1 ] || [ "$sel" -gt "${#menu_tags[@]}" ]; then echo "Out of range (1-${#menu_tags[@]})."; continue; fi
+            break
+        done
 
         tag="${menu_tags[$((sel-1))]}"
         size=$(printf '%s\n' "${AI_MODEL_CATALOG[@]}" | awk -F'|' -v t="$tag" '$1==t {print $2; exit}')
