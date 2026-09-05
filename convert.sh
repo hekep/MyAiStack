@@ -169,8 +169,36 @@ aistackConvertMlx() {
         rm -rf "$out"
         return 1
     fi
+    _aiStackConvertProvenance "$repo" "$bits" "$out"
     ok "Converted: ${out} ($(du -sh "$out" 2>/dev/null | cut -f1))"
     info "Serve it with:  aistackLaunchInference   (it appears in the MLX-LM model list)"
+}
+
+# Write aistack-convert.json into a converted model's folder: where it came
+# from, how, when, with what. Args: <repo> <bits> <out-dir>. The folder is the
+# only thing that outlives this session, so the answer to "how did this model
+# come to be" has to live in it.
+_aiStackConvertProvenance() {
+    local repo="$1" bits="$2" out="$3" snap
+    snap=$(ls -d "${HF_HOME:-$HOME/.cache/huggingface}/hub/models--$(printf '%s' "$repo" | sed 's|/|--|')/snapshots/"*/ 2>/dev/null | head -1)
+    python3 - "$repo" "$bits" "$out" "${snap:-}" <<'PY'
+import json, sys, datetime, subprocess
+repo, bits, out, snap = sys.argv[1:5]
+def cmd(*a):
+    try: return subprocess.run(a, capture_output=True, text=True).stdout.strip()
+    except Exception: return ""
+d = {
+    "source": repo,
+    "source_snapshot": snap or None,
+    "method": f"mlx_lm.convert --hf-path {repo} -q --q-bits {bits}",
+    "bits": int(bits),
+    "converted_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "mlx_lm": (cmd("uv", "tool", "list").split("mlx-lm ")[1].split()[0] if "mlx-lm " in cmd("uv", "tool", "list") else None),
+    "host": cmd("hostname", "-s"),
+    "by": "MyAiStack aistackConvertMlx",
+}
+json.dump(d, open(f"{out}/aistack-convert.json", "w"), indent=2)
+PY
 }
 
 # List models converted locally, with their size. Args: none.
@@ -180,7 +208,8 @@ aistackConvertList() {
     for d in "$MLX_CONVERT_DIR"/*@*bit; do
         [ -d "$d" ] || continue
         n=$((n+1))
-        printf '  %-52s %s\n' "$(basename "$d" | sed 's|__|/|g; s|@|  @|')" "$(du -sh "$d" 2>/dev/null | cut -f1)" >&2
+        printf '  %-52s %s   %s\n' "$(basename "$d" | sed 's|__|/|g; s|@|  @|')" "$(du -sh "$d" 2>/dev/null | cut -f1)" \
+            "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("from %s on %s (mlx-lm %s)" % (d["source"], d["converted_at"][:10], d.get("mlx_lm") or "?"))' "$d/aistack-convert.json" 2>/dev/null || echo "provenance unknown — converted before aistack-convert.json existed")" >&2
     done
     [ "$n" = "0" ] && warn "Nothing converted yet."
     return 0
