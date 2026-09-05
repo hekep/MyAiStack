@@ -446,6 +446,11 @@ Hard-won, and cheap to re-break. These are the macOS-side traps; the Linux ones
   agents infer a runtime from the filename.
 - **`ollama list` needs the daemon**; model presence and size must fall back to
   reading `~/.ollama/models/manifests`.
+- **The installer starts the Ollama daemon only to download, and stops it
+  again if it was the one that started it.** Ollama is not the dominant engine
+  here; a daemon left behind by the wizard made the next llama.cpp launch ask
+  about stopping a process nobody consciously started. A daemon that was already
+  up is the user's and is left alone.
 - **zsh does not word-split a plain `$var`** (it does split `$(cmd)`), and sets
   `$0` to the sourced file. Both have caused real bugs here.
 - **bash expands every `local` argument before assigning any**, so

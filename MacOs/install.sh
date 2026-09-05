@@ -487,7 +487,20 @@ ollama_ensure_daemon() {
     nohup ollama serve >/dev/null 2>&1 &
     sleep 3
     ollama_server_up || { fail "Could not start the Ollama daemon."; return 1; }
-    ok "Daemon running on ${OLLAMA_API}:11434."
+    OLLAMA_STARTED_BY_INSTALLER=1
+    ok "Daemon running on ${OLLAMA_API}:11434 — will be stopped again when the downloads are done."
+}
+
+# Stop the daemon again, but only if this run started it. A daemon that was
+# already up belongs to the user and is left alone. Ollama is not the dominant
+# engine here: leaving it running would make the next launch of llama.cpp or
+# MLX-LM ask "Also stop the Ollama daemon itself?" about a process nobody
+# consciously started.
+ollama_release_daemon() {
+    [ "${OLLAMA_STARTED_BY_INSTALLER:-0}" = "1" ] || return 0
+    pkill -f "ollama serve" 2>/dev/null
+    OLLAMA_STARTED_BY_INSTALLER=0
+    ok "Ollama daemon stopped — it was started only for the downloads."
 }
 
 # ---------- step: uv ---------------------------------------------------------
@@ -1194,7 +1207,10 @@ aistackInstallOllamaModels() {
     ollama_ensure_daemon || return 1
     # clean leftovers of interrupted/failed pulls first, so free-space is honest
     ollama_prune_orphan_blobs ask
-    aiStackModelMenu "Ollama" ollamaListInstalled ollamaPullModel
+    local rc=0
+    aiStackModelMenu "Ollama" ollamaListInstalled ollamaPullModel || rc=$?
+    ollama_release_daemon
+    return $rc
 }
 
 # ---------- Tools ------------------------------------------------------------
@@ -1480,9 +1496,13 @@ aistackInstallVerification() {
         echo "    MLX-LM / HF cache: ${m:-0}"
         mlxmlListInstalled | sed 's/^/      /'
     fi
-    if ollama_installed && ollama_server_up; then
-        echo "    Ollama:"
-        ollama list | sed 's/^/      /'
+    if ollama_installed; then
+        # read from the manifests when the daemon is down — it usually is, now
+        # that the installer stops what it started
+        local o
+        o=$(ollamaListInstalled | grep -c . || true)
+        echo "    Ollama (~/.ollama): ${o:-0}"
+        ollamaListInstalled | sed 's/^/      /'
     fi
     echo
     echo "    Benchmark Ollama models with ./aiModelTest.sh or ./testAllAiModels.sh"

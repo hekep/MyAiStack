@@ -1006,13 +1006,29 @@ ollama_ensure_daemon() {
         info "Starting the system-wide ollama.service (needed to download models)..."
         _asRoot systemctl start ollama.service >/dev/null 2>&1
         sleep 3
-        ollama_server_up && { ok "Daemon running on ${OLLAMA_API}:11434 (system service)."; return 0; }
+        ollama_server_up && { OLLAMA_STARTED_BY_INSTALLER=service
+                              ok "Daemon running on ${OLLAMA_API}:11434 (system service) — stopped again after the downloads."; return 0; }
     fi
     info "Starting the Ollama daemon (needed to download models)..."
     OLLAMA_MODELS="$(ollamaModelsDir)" nohup ollama serve >/dev/null 2>&1 &
     sleep 3
     ollama_server_up || { fail "Could not start the Ollama daemon."; return 1; }
-    ok "Daemon running on ${OLLAMA_API}:11434 (models in $(ollamaModelsDir))."
+    OLLAMA_STARTED_BY_INSTALLER=process
+    ok "Daemon running on ${OLLAMA_API}:11434 (models in $(ollamaModelsDir)) — stopped again after the downloads."
+}
+
+# Stop the daemon again, the same way it was started, but only if this run
+# started it. A daemon that was already up belongs to the user and is left
+# alone. Ollama is not the dominant engine here: leaving it running would make
+# the next llama.cpp launch ask about stopping a process nobody consciously started.
+ollama_release_daemon() {
+    case "${OLLAMA_STARTED_BY_INSTALLER:-}" in
+        service) _asRoot systemctl stop ollama.service >/dev/null 2>&1 ;;
+        process) pkill -f "ollama serve" 2>/dev/null ;;
+        *) return 0 ;;
+    esac
+    OLLAMA_STARTED_BY_INSTALLER=""
+    ok "Ollama daemon stopped — it was started only for the downloads."
 }
 
 # ---------- step: uv ---------------------------------------------------------
@@ -1667,7 +1683,10 @@ aistackInstallOllamaModels() {
     ollama_ensure_daemon || return 1
     # clean leftovers of interrupted/failed pulls first, so free-space is honest
     ollama_prune_orphan_blobs ask
-    aiStackModelMenu "Ollama" ollamaListInstalled ollamaPullModel
+    local rc=0
+    aiStackModelMenu "Ollama" ollamaListInstalled ollamaPullModel || rc=$?
+    ollama_release_daemon
+    return $rc
 }
 
 # ---------- Tools ------------------------------------------------------------
