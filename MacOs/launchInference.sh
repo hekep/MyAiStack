@@ -172,6 +172,28 @@ tooluniverseKillOurs() { pkill  -f "tooluniverse(Server\.py|-smcp-server) .*--po
 tooluniverse_up() { local c; c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
                         "http://127.0.0.1:${TOOLUNIVERSE_PORT}/mcp" 2>/dev/null); [ -n "$c" ] && [ "$c" != "000" ]; }
 
+# One log file per launch, named by its start time, behind a stable path.
+# Args: <stable-path> <name>. Creates <dir>/logs/<YYYY-MM-DD_HH_MM_SS>_<name>,
+# points <stable-path> at it as a symlink, and prints the new file. A plain
+# file already at <stable-path> — history from before this existed — is moved
+# into logs/ under its own modification time, never overwritten. Everything
+# that reads or appends through the stable path keeps working unchanged: the
+# proxy callback, ProxyLog, the benchmark runner, and the server's own
+# stdout/stderr redirect (a redirect onto a symlink writes to its target).
+aiStackLogRotate() {
+    local stable="$1" name="$2" dir ts new old
+    dir="$(dirname "$stable")/logs"; mkdir -p "$dir"
+    if [ -f "$stable" ] && [ ! -L "$stable" ]; then
+        old=$(python3 -c 'import os,sys,time; print(time.strftime("%Y-%m-%d_%H_%M_%S", time.localtime(os.path.getmtime(sys.argv[1]))))' "$stable")
+        mv "$stable" "$dir/${old}_${name}"
+    fi
+    ts=$(date +%Y-%m-%d_%H_%M_%S)
+    new="$dir/${ts}_${name}"
+    : > "$new"
+    ln -sfn "$new" "$stable"
+    printf '%s\n' "$new"
+}
+
 # Longest context a llama.cpp model was trained for. Args: <tag>.
 # Read straight out of the GGUF header, so it costs a few kilobytes and no model
 # load. llama-server will happily accept -c far above this: it splits the request
@@ -926,6 +948,7 @@ aistackLaunchInferenceProxyLog() {
         warn "${PROXY_REQUEST_LOG} holds ${lines} calls and takes ${sz}."
         warn "It contains every prompt and reply that went through the proxy."
         ask_ny "Delete it?" || { ok "Kept."; return 0; }
+        [ -L "$PROXY_REQUEST_LOG" ] && rm -f "$(readlink "$PROXY_REQUEST_LOG")"
         rm -f "$PROXY_REQUEST_LOG"
         ok "Deleted — ${sz} reclaimed."
         # The callback opens the file per write, so a running proxy simply
@@ -1038,13 +1061,14 @@ aistackLaunchInferenceStartTools() {
     fi
     [ -n "$(tooluniverseOurPids)" ] && aistackLaunchInferenceStopTools
     mkdir -p "$(dirname "$TOOLUNIVERSE_LOG")"
+    local tulog; tulog=$(aiStackLogRotate "$TOOLUNIVERSE_LOG" tooluniverse.log)
     # ToolUniverse itself picks cuda or cpu for the Tool_RAG embedder and nothing
     # else; tooluniverseServer.py is the same server with that one method
     # replaced so the embedder runs on Metal. Falls back to the console script
     # when the wrapper or the tool's interpreter is missing.
     local py="$HOME/.local/share/uv/tools/tooluniverse/bin/python" wrapper
     wrapper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tooluniverseServer.py"
-    info "Starting ToolUniverse on 127.0.0.1:${TOOLUNIVERSE_PORT} (${TOOLUNIVERSE_ARGS}) — log: ${TOOLUNIVERSE_LOG}"
+    info "Starting ToolUniverse on 127.0.0.1:${TOOLUNIVERSE_PORT} (${TOOLUNIVERSE_ARGS}) — log: ${tulog}"
     # shellcheck disable=SC2086  # TOOLUNIVERSE_ARGS is a flag list by design
     if [ -x "$py" ] && [ -f "$wrapper" ]; then
         nohup "$py" "$wrapper" --host 127.0.0.1 --port "${TOOLUNIVERSE_PORT}" ${TOOLUNIVERSE_ARGS} \
@@ -1295,6 +1319,7 @@ aistackLaunchInferenceStartProxy() {
     fi
 
     mkdir -p "$(dirname "$LITELLM_CONFIG")"
+    local reqlog; reqlog=$(aiStackLogRotate "$PROXY_REQUEST_LOG" litellm-requests.jsonl)
     _aiStackWriteProxyLogger
     # openai/<id> tells LiteLLM to speak the OpenAI protocol to api_base rather
     # than to look the name up as a hosted model.
@@ -1323,7 +1348,8 @@ YAML
     fi
     LAUNCH_ENDPOINT="http://127.0.0.1:${LITELLM_PORT}"
     ok "Proxy:    ${LAUNCH_ENDPOINT} -> ${upstream}"
-    ok "Requests: ${PROXY_REQUEST_LOG}"
+    ok "Requests: ${reqlog}"
+    ok "          (latest is always ${PROXY_REQUEST_LOG})"
     info "Read it with:  aistackLaunchInferenceProxyLog"
     return 0
 }
