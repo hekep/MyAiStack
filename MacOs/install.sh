@@ -968,6 +968,10 @@ mlxmlListInstalled() {
     local d b
     for d in "$MLX_HF_CACHE"/models--*; do
         [ -d "$d" ] || continue
+        # still downloading, or a sentence-transformers embedder (modules.json —
+        # ToolUniverse's Tool_RAG model lives in this cache too): not servable
+        if find "$d" -name '*.incomplete' -print -quit 2>/dev/null | grep -q .; then continue; fi
+        if find "$d/snapshots" -maxdepth 2 -name modules.json -print -quit 2>/dev/null | grep -q .; then continue; fi
         b=$(basename "$d")
         printf '%s\n' "$(printf '%s' "${b#models--}" | sed 's|--|/|')"
     done

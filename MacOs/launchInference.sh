@@ -454,6 +454,12 @@ mlxmlListInstalled() {
             if find "$d" -name '*.incomplete' -print -quit 2>/dev/null | grep -q .; then
                 continue
             fi
+            # sentence-transformers models (ToolUniverse's Tool_RAG embedder lives
+            # here too) carry modules.json; mlx_lm.server cannot serve one, so the
+            # menu must not offer it
+            if find "$d/snapshots" -maxdepth 2 -name modules.json -print -quit 2>/dev/null | grep -q .; then
+                continue
+            fi
             b=$(basename "$d")
             printf '%s\n' "$(printf '%s' "${b#models--}" | sed 's|--|/|')"
         done
@@ -552,8 +558,8 @@ engineModelSizeGb() {
             [ -e "$f" ] && du -m "$f" 2>/dev/null | awk '{printf "%d", $1/1024}' || echo 0 ;;
         MLX-LM)
             # a locally converted model is a directory, not an HF cache entry
-            case "$model" in
-                /*) du -sk "$model" 2>/dev/null | awk '{printf "%d", ($1/1048576)+0.5}'; return 0 ;;
+            case "$tag" in
+                /*) du -sk "$tag" 2>/dev/null | awk '{printf "%d", ($1/1048576)+0.5}'; return 0 ;;
             esac
             d="${MLX_HF_CACHE}/models--$(printf '%s' "$tag" | sed 's|/|--|')"
             [ -d "$d" ] && du -sm "$d" 2>/dev/null | awk '{printf "%d", $1/1024}' || echo 0 ;;
