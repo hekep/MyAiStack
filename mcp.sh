@@ -1141,6 +1141,17 @@ export default function (pi: ExtensionAPI) {
    * turn it back on; no rebuild needed.
    */
   const KEEP = Number(process.env.AISTACK_MCP_MAX_RECORDS ?? "0") || 0;
+  // Loader mode only: results of tools the model fetched by name. ToolUniverse
+  // returns prose — a drug label is 74,000 characters — and four such results
+  // took one prompt to 50,000 tokens, which is what pushed a 48 GB Mac into
+  // swap. Records-based reduction cannot see prose, so this is a plain
+  // character cap with a note the model can act on. 0 = no cap.
+  const MAX_CHARS = Number(process.env.AISTACK_MCP_MAX_CHARS ?? "16000") || 0;
+  function capChars(text: string): string {
+    if (!MAX_CHARS || text.length <= MAX_CHARS) return text;
+    return text.slice(0, MAX_CHARS) + "\n\n[MyAiStack: result truncated — " + MAX_CHARS + " of " + text.length +
+      " characters shown. Ask a narrower question or a more specific tool for the rest.]";
+  }
   function r1(n: number): number { return Math.round(n * 10) / 10; }
   function reduceResult(text: string): string {
     if (KEEP <= 0) return text;   // raw: the model gets the server response verbatim
@@ -1310,7 +1321,7 @@ Today is \${TODAY} in timezone \${TZ}. Recent days: \${RECENT_DAYS}. Use that li
             args[LOADER.dispatch.name_key] = name;
             args[LOADER.dispatch.args_key] = params;
             const raw = await call(LOADER.dispatch.tool, args, signal);
-            return { content: [{ type: "text", text: reduceResult(raw) }],
+            return { content: [{ type: "text", text: capChars(reduceResult(raw)) }],
                      details: { server: NAME, tool: name, via: LOADER.dispatch.tool } };
           } finally { ctx.ui.setStatus("mcp-" + NAME, undefined); }
         },
