@@ -474,3 +474,12 @@ reported as protected** rather than assumed absent.
 Nothing above is a stub. A step that cannot mean anything on a platform is
 absent from that platform, and the place where you would have looked for it
 tells you why.
+
+## Tools layer: the embedder's device
+
+ToolUniverse loads the `Tool_RAG` embedder on CUDA or CPU and nothing else.
+macOS starts the server through `MacOs/tooluniverseServer.py`, the same server
+with that one method replaced so the embedder runs on Metal in fp16; Debian
+has no Metal and runs the plain console script on the CPU (5.6 GiB resident,
+same cache format, same results — measured identical top-5 on the reference
+Mac). `aistackLaunchInferenceWarmupTools` exists on both.

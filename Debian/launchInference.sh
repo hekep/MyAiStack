@@ -211,6 +211,8 @@ ollama_installed()   { command -v ollama >/dev/null 2>&1; }
 TOOLUNIVERSE_PORT="${TOOLUNIVERSE_PORT:-8765}"
 TOOLUNIVERSE_ARGS="${TOOLUNIVERSE_ARGS:---compact-mode}"
 TOOLUNIVERSE_LOG="${TOOLUNIVERSE_LOG:-$HOME/.aistack/tooluniverse.log}"
+# Where ToolUniverse keeps the Tool_RAG embedding cache (utils.get_user_cache_dir).
+TOOLUNIVERSE_CACHE_DIR="${TOOLUNIVERSE_TMPDIR:-${XDG_CACHE_HOME:-$HOME/.cache}/tooluniverse}"
 tooluniverse_installed() { command -v tooluniverse-smcp-server >/dev/null 2>&1 \
                            || { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^tooluniverse'; }; }
 # Only OUR server: the one on our port.
@@ -949,6 +951,66 @@ aistackLaunchInferenceStartTools() {
         root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
         ( set +u; . "$root/mcp.sh" && aistackMcpBuild tooluniverse ) || warn "Build failed — run: aistackMcpBuild tooluniverse"
     fi
+    [ -n "$(tooluniverseCacheFile)" ] \
+        || warn "No Tool_RAG embedding cache yet — the first Tool_RAG call would stall for minutes. Once: aistackLaunchInferenceWarmupTools"
+}
+
+# The newest embedding cache file ToolUniverse wrote, or nothing.
+tooluniverseCacheFile() { ls -t "${TOOLUNIVERSE_CACHE_DIR}/embeddings/"*.pt 2>/dev/null | head -1; }
+
+# Warm up Tool_RAG: fetch the embedding model and have the RUNNING server encode
+# every loaded tool description once, so the first Tool_RAG call in a session
+# is not a multi-minute stall inside a 90 s RPC. Args: [connector] (default
+# tooluniverse). The encode goes through the server on purpose — ToolUniverse
+# keys the cache on the exact tool set that process loaded, and a Python
+# one-liner would load a different set and pay for a second full encode.
+aistackLaunchInferenceWarmupTools() {
+    local name="${1:-tooluniverse}" py="$HOME/.local/share/uv/tools/tooluniverse/bin/python" root cache t0 ms
+    local snap="${HF_HOME:-$HOME/.cache/huggingface}/hub/models--mims-harvard--ToolRAG-T1-GTE-Qwen2-1.5B"
+    tooluniverse_installed || { fail "ToolUniverse is not installed — run: aistackInstallTooluniverseTools"; return 1; }
+    tooluniverse_up || { fail "Nothing answers on port ${TOOLUNIVERSE_PORT} — start it: aistackLaunchInferenceStartTools"; return 1; }
+    [ -f "${MCP_HOME:-$HOME/.aistack/mcp}/${name}/server.json" ] \
+        || { fail "No MCP connector '${name}' — register it: aistackMcpAdd ${name} --url http://127.0.0.1:${TOOLUNIVERSE_PORT}/mcp --no-auth"; return 1; }
+    root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    info "aistackLaunchInferenceWarmupTools — ToolRAG-T1 embedder + embedding cache"
+
+    # 1. the model: 5.75 GiB, resumable, once
+    if [ -d "$snap/snapshots" ] && ! ls "$snap"/blobs/*.incomplete >/dev/null 2>&1; then
+        ok "Embedder present: $(du -sh "$snap" 2>/dev/null | cut -f1) — ${snap}"
+    else
+        info "Downloading mims-harvard/ToolRAG-T1-GTE-Qwen2-1.5B (5.75 GiB)..."
+        [ -x "$py" ] || py=python3
+        "$py" -c 'from huggingface_hub import snapshot_download as s; print(s("mims-harvard/ToolRAG-T1-GTE-Qwen2-1.5B"))' \
+            || { fail "Download failed."; return 1; }
+        ok "Embedder downloaded: $(du -sh "$snap" 2>/dev/null | cut -f1)"
+    fi
+
+    # 2. the cache — always through the running server. A .pt on disk proves
+    #    nothing about THIS server: the key is the exact tool set it loaded.
+    #    If the cache matches, this returns in seconds; if not, the server
+    #    encodes every loaded description now (minutes, once) and writes it.
+    local total
+    total=$( ( set +u; . "$root/mcp.sh"; aistackMcpCall "$name" list_tools '{"mode":"names","limit":1}' 2>/dev/null ) \
+             | python3 -c 'import json,sys; d=json.load(sys.stdin); d=json.loads(d) if isinstance(d,str) else d; print(d.get("total_tools","?"))' 2>/dev/null)
+    info "Warming Tool_RAG through the running server (${total:-?} tools loaded) — minutes on a first run, seconds after..."
+    t0=$(date +%s)
+    ( set +u; . "$root/mcp.sh"
+      AISTACK_MCP_TIMEOUT=3600 aistackMcpCall "$name" find_tools '{"query":"warm-up","limit":1,"search_method":"embedding"}' >/dev/null ) \
+        || { fail "Warm-up call failed — see ${TOOLUNIVERSE_LOG}"; return 1; }
+    cache=$(tooluniverseCacheFile)
+    ok "Warm-up call: $(( $(date +%s) - t0 )) s · cache: $(du -h "$cache" 2>/dev/null | cut -f1) ${cache:-"(no cache file found)"}"
+
+    # 3. a warm call, timed — this is what a session will feel
+    ms=$(python3 -c 'import time; print(int(time.time()*1000))')
+    ( set +u; . "$root/mcp.sh"
+      AISTACK_MCP_TIMEOUT=600 aistackMcpCall "$name" find_tools '{"query":"drug contraindication evidence","limit":5,"search_method":"embedding"}' >/dev/null ) \
+        || { fail "Warm call failed — see ${TOOLUNIVERSE_LOG}"; return 1; }
+    ms=$(( $(python3 -c 'import time; print(int(time.time()*1000))') - ms ))
+    ok "Warm Tool_RAG call: ${ms} ms  ($(grep -o '\[MyAiStack\] Tool_RAG embedder will load on [a-z0-9]* as [a-z0-9]*' "$TOOLUNIVERSE_LOG" 2>/dev/null | tail -1 | sed 's/.*load on //' || echo 'cpu (Linux: no Metal)'))"
+    # memory, measured three ways — process RSS alone says little on unified memory
+    local spid; spid=$(tooluniverseOurPids | head -1)
+    [ -n "$spid" ] && ok "Server RSS: $(ps -o rss= -p "$spid" | awk '{printf "%.2f GiB", $1/1048576}')  $(grep -o '\[MyAiStack\] embedder memory.*' "$TOOLUNIVERSE_LOG" 2>/dev/null | tail -1 | sed 's/\[MyAiStack\] //')"
+    ok "Host: $(awk '/MemAvailable/ {printf "available %.1f GiB", $2/1048576} /SwapFree/ {sf=$2} /SwapTotal/ {st=$2} END {printf " · swap used %.1f GiB", (st-sf)/1048576}' /proc/meminfo)"
 }
 
 # The mirror of StartTools: declining has to actively remove a server that is

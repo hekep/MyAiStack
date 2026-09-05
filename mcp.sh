@@ -191,7 +191,9 @@ _aiStackMcpRpc() {
         sid=$(cat "$dir/.session" 2>/dev/null)
         id=$$$RANDOM
         [ -n "$sid" ] && extra+=(-H "mcp-session-id: ${sid}")
-        code=$(curl -s -o "$body" -D "$hdrs" -w '%{http_code}' --max-time 90 -X POST "$url" \
+        # AISTACK_MCP_TIMEOUT: a first Tool_RAG call on a cold ToolUniverse encodes
+        # thousands of tool specs and needs minutes; 90 s is right for everything else
+        code=$(curl -s -o "$body" -D "$hdrs" -w '%{http_code}' --max-time "${AISTACK_MCP_TIMEOUT:-90}" -X POST "$url" \
             -H 'content-type: application/json' \
             -H 'accept: application/json, text/event-stream' \
             -H "mcp-protocol-version: ${MCP_PROTOCOL}" \
@@ -629,6 +631,36 @@ PY
 # completion — no JSON parsing on the completion path), then generates the
 # plugin for each agent chosen at add time. Re-run it whenever the server's
 # tools change: it is idempotent, and the shims always match what is cached.
+# Loader mode. Args: <name>. Prints "loader" or "plain". When a server offers a
+# finder that returns tool specs and a dispatcher that runs any tool by name —
+# ToolUniverse's find_tools and execute_tool — loader.json is written and the
+# generated Pi extension exposes ONE tool, Tool_RAG(description, limit), in place
+# of the discovery tools. That is the protocol ATHENA-R1 was trained on: ask for
+# tools, get their specs back, call them by name. The file is data, so the same
+# template serves any server with this shape; a server without it (Aidlab) gets
+# no file and today's extension, byte for byte.
+_aiStackMcpLoaderConfig() {
+    local name="$1" dir; dir=$(_aiStackMcpDir "$name")
+    python3 - "$dir" <<'PY'
+import json, os, sys
+d = sys.argv[1]
+names = {t["name"] for t in json.load(open(f"{d}/tools.json"))["tools"]}
+p = f"{d}/loader.json"
+if {"find_tools", "execute_tool"} <= names:
+    json.dump({
+        "tool": "Tool_RAG",
+        "params": {"description": "query", "limit": "limit"},
+        "finder": {"tool": "find_tools", "fixed": {"search_method": "embedding", "use_advanced_search": True}},
+        "dispatch": {"tool": "execute_tool", "name_key": "tool_name", "args_key": "arguments"},
+        "hide": ["list_tools", "grep_tools", "get_tool_info", "execute_tool", "find_tools"],
+    }, open(p, "w"), indent=2)
+    print("loader")
+else:
+    if os.path.exists(p): os.remove(p)
+    print("plain")
+PY
+}
+
 aistackMcpBuild() {
     if [ $# -lt 1 ]; then
         aiStackUsage "aistackMcpBuild <name>" \
@@ -660,6 +692,9 @@ PY
 ) || return 1
     rm -f "$dir/.tools.raw"
     ok "${name}: ${n} tools cached."
+    if [ "$(_aiStackMcpLoaderConfig "$name")" = "loader" ]; then
+        ok "${name}: loader mode — Pi gets Tool_RAG(description, limit); the discovery tools stay hidden."
+    fi
     [ -n "${AI_STACK_QUIET:-}" ] || cut -f1 "$dir/tools.txt" | sed 's/^/      /' >&2
     _aiStackMcpRender "$name"
 }
@@ -953,10 +988,13 @@ _aiStackMcpRenderPi() {
 // yourself:  aistackMcpCall ${name} <tool> '<json>'
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 
 const NAME = "${name}", LABEL = "${label}", DIR = "${dir}", MCP_SH = "${self}";
+// loader.json (written by aistackMcpBuild) switches this extension into loader
+// mode: one Tool_RAG tool instead of the server's discovery tools — see below.
+const LOADER: any = existsSync(DIR + "/loader.json") ? JSON.parse(readFileSync(DIR + "/loader.json", "utf8")) : null;
 type McpTool = { name: string; description?: string; inputSchema?: Record<string, unknown> };
 
 function call(tool: string, args: unknown, signal?: AbortSignal): Promise<string> {
@@ -1174,6 +1212,7 @@ export default function (pi: ExtensionAPI) {
     let n = 0;
     for (const t of tools) {
       if (registered.has(t.name)) continue;
+      if (LOADER && Array.isArray(LOADER.hide) && LOADER.hide.includes(t.name)) continue;
       registered.add(t.name); n++;
       pi.registerTool({
         name: t.name,
@@ -1221,18 +1260,105 @@ Today is \${TODAY} in timezone \${TZ}. Recent days: \${RECENT_DAYS}. Use that li
    * registered when nothing else provides it, so two connectors cannot clash.
    */
   function registerFinish(): void {
-    try {
-      if (pi.getAllTools().some((x: any) => x.name === "finish")) return;
-    } catch { /* older Pi without getAllTools: register anyway */ }
-    if (registered.has("finish")) return;
-    registered.add("finish");
+    // "Finish" is ToolUniverse's special tool and what ATHENA-R1 emits; "finish"
+    // is what the same model produced through llama.cpp. Both end the turn.
+    for (const fname of ["finish", "Finish"]) {
+      let exists = false;
+      try { exists = pi.getAllTools().some((x: any) => x.name === fname); } catch { /* older Pi */ }
+      if (exists || registered.has(fname)) continue;
+      registered.add(fname);
+      pi.registerTool({
+        name: fname,
+        label: "Finish",
+        description: "End the turn. Call this when you have answered and need no more tools.",
+        parameters: Type.Unsafe<Record<string, unknown>>({ type: "object", properties: {} }),
+        async execute() {
+          return { content: [{ type: "text", text: "Done." }], details: {}, terminate: true };
+        },
+      });
+    }
+  }
+
+  /**
+   * Loader mode. The model gets ONE tool, Tool_RAG(description, limit) — what
+   * ATHENA-R1 was trained to call. The server's embedding model picks the best
+   * tools out of thousands; they are registered right here (Pi activates newly
+   * registered tools on its own) and their specs are returned as text, the
+   * format the model learned to read. Calls to them go through the server's
+   * dispatcher. Nothing of the thousands reaches the prompt until asked for.
+   */
+  function registerRetrieved(specs: any[]): string[] {
+    const added: string[] = [];
+    for (const s of specs) {
+      const name = String(s.name ?? "");
+      if (!name || registered.has(name)) continue;
+      let exists = false;
+      try { exists = pi.getAllTools().some((x: any) => x.name === name); } catch { /* older Pi */ }
+      if (exists) continue;
+      registered.add(name); added.push(name);
+      const schema = (s.parameter && typeof s.parameter === "object") ? s.parameter : { type: "object", properties: {} };
+      pi.registerTool({
+        name,
+        label: LABEL + ": " + name,
+        description: String(s.description ?? name),
+        parameters: Type.Unsafe<Record<string, unknown>>(slim(schema)),
+        executionMode: "sequential",
+        async execute(_id, params, signal, _onUpdate, ctx: ExtensionContext) {
+          ctx.ui.setStatus("mcp-" + NAME, LABEL + ": " + name + "…");
+          try {
+            const args: Record<string, unknown> = {};
+            args[LOADER.dispatch.name_key] = name;
+            args[LOADER.dispatch.args_key] = params;
+            const raw = await call(LOADER.dispatch.tool, args, signal);
+            return { content: [{ type: "text", text: reduceResult(raw) }],
+                     details: { server: NAME, tool: name, via: LOADER.dispatch.tool } };
+          } finally { ctx.ui.setStatus("mcp-" + NAME, undefined); }
+        },
+      });
+    }
+    return added;
+  }
+
+  function registerLoader(): void {
+    if (!LOADER || registered.has(LOADER.tool)) return;
+    registered.add(LOADER.tool);
+    const pDesc = String(LOADER.params.description), pLimit = String(LOADER.params.limit);
     pi.registerTool({
-      name: "finish",
-      label: "Finish",
-      description: "End the turn. Call this when you have answered and need no more tools.",
-      parameters: Type.Unsafe<Record<string, unknown>>({ type: "object", properties: {} }),
-      async execute() {
-        return { content: [{ type: "text", text: "Done." }], details: {}, terminate: true };
+      name: LOADER.tool,
+      label: LABEL + ": " + LOADER.tool,
+      description: "Find the tools relevant to a task. Describe what you need in one sentence; the best-matching tools are returned with their parameters and become callable by name. Call this before answering anything that needs external data.",
+      parameters: Type.Unsafe<Record<string, unknown>>({
+        type: "object",
+        properties: {
+          description: { type: "string", description: "What the tool should do, in one sentence" },
+          limit: { type: "integer", description: "How many tools to return (default 5)", minimum: 1, maximum: 20 },
+        },
+        required: ["description"],
+      }),
+      executionMode: "sequential",
+      async execute(_id, params, signal, _onUpdate, ctx: ExtensionContext) {
+        const p = params as Record<string, any>;
+        const t0 = Date.now();
+        ctx.ui.setStatus("mcp-" + NAME, LABEL + ": " + LOADER.tool + "…");
+        try {
+          const args: Record<string, unknown> = Object.assign({}, LOADER.finder.fixed ?? {});
+          args[pDesc] = String(p.description ?? "");
+          args[pLimit] = Number(p.limit ?? 5);
+          const raw = await call(LOADER.finder.tool, args, signal);
+          let specs: any = null;
+          try { specs = JSON.parse(raw); if (typeof specs === "string") specs = JSON.parse(specs); } catch { specs = null; }
+          if (!Array.isArray(specs)) {
+            return { content: [{ type: "text", text: raw }], details: { server: NAME, tool: LOADER.tool } };
+          }
+          // Protocol fidelity: the model was trained on ToolUniverse's own JSON and
+          // nothing else. Registration and the notification are side effects the
+          // model never sees; the text it gets is the server's result, unchanged.
+          const added = registerRetrieved(specs);
+          const names = specs.map((x: any) => String(x.name ?? "")).filter(Boolean);
+          ctx.ui.notify(LABEL + ": " + LOADER.tool + " → " + names.join(", ") + " (" + (Date.now() - t0) + " ms)", "info");
+          return { content: [{ type: "text", text: raw }],
+                   details: { server: NAME, tool: LOADER.tool, retrieved: names, registered: added, ms: Date.now() - t0 } };
+        } finally { ctx.ui.setStatus("mcp-" + NAME, undefined); }
       },
     });
   }
@@ -1241,7 +1367,8 @@ Today is \${TODAY} in timezone \${TZ}. Recent days: \${RECENT_DAYS}. Use that li
     try {
       const { tools } = JSON.parse(readFileSync(\`\${DIR}/tools.json\`, "utf8")) as { tools: McpTool[] };
       registerFinish();
-      ctx.ui.notify(\`\${LABEL}: \${register(tools)} MCP tools ready — /mcp-\${NAME} for status\`, "info");
+      registerLoader();
+      ctx.ui.notify(\`\${LABEL}: \${register(tools)} MCP tools ready\${LOADER ? " · " + LOADER.tool + " on" : ""} — /mcp-\${NAME} for status\`, "info");
     } catch (e: any) {
       ctx.ui.notify(\`\${LABEL}: \${e.message} — run: aistackMcpBuild \${NAME}\`, "warning");
     }

@@ -158,11 +158,15 @@ litellm_up() { curl -sf --max-time 3 "http://127.0.0.1:${LITELLM_PORT}/health/li
 TOOLUNIVERSE_PORT="${TOOLUNIVERSE_PORT:-8765}"
 TOOLUNIVERSE_ARGS="${TOOLUNIVERSE_ARGS:---compact-mode}"
 TOOLUNIVERSE_LOG="${TOOLUNIVERSE_LOG:-$HOME/.aistack/tooluniverse.log}"
+# Where ToolUniverse keeps the Tool_RAG embedding cache (utils.get_user_cache_dir).
+TOOLUNIVERSE_CACHE_DIR="${TOOLUNIVERSE_TMPDIR:-$HOME/Library/Caches/ToolUniverse}"
 tooluniverse_installed() { command -v tooluniverse-smcp-server >/dev/null 2>&1 \
                            || { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^tooluniverse'; }; }
 # Only OUR server: the one on our port. Same port-scoped match as the proxy.
-tooluniverseOurPids()  { pgrep -f "tooluniverse-smcp-server .*--port ${TOOLUNIVERSE_PORT}" 2>/dev/null; }
-tooluniverseKillOurs() { pkill  -f "tooluniverse-smcp-server .*--port ${TOOLUNIVERSE_PORT}" 2>/dev/null; }
+# Two command lines are ours: the console script, and tooluniverseServer.py —
+# the same server with the embedder on Metal, which is what this launcher starts.
+tooluniverseOurPids()  { pgrep -f "tooluniverse(Server\.py|-smcp-server) .*--port ${TOOLUNIVERSE_PORT}" 2>/dev/null; }
+tooluniverseKillOurs() { pkill  -f "tooluniverse(Server\.py|-smcp-server) .*--port ${TOOLUNIVERSE_PORT}" 2>/dev/null; }
 # True when something answers on the port. MCP streamable-http rejects a bare
 # GET with a 4xx, so any HTTP status at all means a server is there.
 tooluniverse_up() { local c; c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
@@ -1028,10 +1032,22 @@ aistackLaunchInferenceStartTools() {
     fi
     [ -n "$(tooluniverseOurPids)" ] && aistackLaunchInferenceStopTools
     mkdir -p "$(dirname "$TOOLUNIVERSE_LOG")"
+    # ToolUniverse itself picks cuda or cpu for the Tool_RAG embedder and nothing
+    # else; tooluniverseServer.py is the same server with that one method
+    # replaced so the embedder runs on Metal. Falls back to the console script
+    # when the wrapper or the tool's interpreter is missing.
+    local py="$HOME/.local/share/uv/tools/tooluniverse/bin/python" wrapper
+    wrapper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tooluniverseServer.py"
     info "Starting ToolUniverse on 127.0.0.1:${TOOLUNIVERSE_PORT} (${TOOLUNIVERSE_ARGS}) — log: ${TOOLUNIVERSE_LOG}"
     # shellcheck disable=SC2086  # TOOLUNIVERSE_ARGS is a flag list by design
-    nohup tooluniverse-smcp-server --host 127.0.0.1 --port "${TOOLUNIVERSE_PORT}" ${TOOLUNIVERSE_ARGS} \
-        >"$TOOLUNIVERSE_LOG" 2>&1 </dev/null &
+    if [ -x "$py" ] && [ -f "$wrapper" ]; then
+        nohup "$py" "$wrapper" --host 127.0.0.1 --port "${TOOLUNIVERSE_PORT}" ${TOOLUNIVERSE_ARGS} \
+            >"$TOOLUNIVERSE_LOG" 2>&1 </dev/null &
+    else
+        warn "tooluniverseServer.py or the tool's Python not found — embedder will run on the CPU."
+        nohup tooluniverse-smcp-server --host 127.0.0.1 --port "${TOOLUNIVERSE_PORT}" ${TOOLUNIVERSE_ARGS} \
+            >"$TOOLUNIVERSE_LOG" 2>&1 </dev/null &
+    fi
     local t=0
     while [ "$t" -lt 180 ]; do
         tooluniverse_up && break
@@ -1051,6 +1067,66 @@ aistackLaunchInferenceStartTools() {
         root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
         ( set +u; . "$root/mcp.sh" && aistackMcpBuild tooluniverse ) || warn "Build failed — run: aistackMcpBuild tooluniverse"
     fi
+    [ -n "$(tooluniverseCacheFile)" ] \
+        || warn "No Tool_RAG embedding cache yet — the first Tool_RAG call would stall for minutes. Once: aistackLaunchInferenceWarmupTools"
+}
+
+# The newest embedding cache file ToolUniverse wrote, or nothing.
+tooluniverseCacheFile() { ls -t "${TOOLUNIVERSE_CACHE_DIR}/embeddings/"*.pt 2>/dev/null | head -1; }
+
+# Warm up Tool_RAG: fetch the embedding model and have the RUNNING server encode
+# every loaded tool description once, so the first Tool_RAG call in a session
+# is not a multi-minute stall inside a 90 s RPC. Args: [connector] (default
+# tooluniverse). The encode goes through the server on purpose — ToolUniverse
+# keys the cache on the exact tool set that process loaded, and a Python
+# one-liner would load a different set and pay for a second full encode.
+aistackLaunchInferenceWarmupTools() {
+    local name="${1:-tooluniverse}" py="$HOME/.local/share/uv/tools/tooluniverse/bin/python" root cache t0 ms
+    local snap="${HF_HOME:-$HOME/.cache/huggingface}/hub/models--mims-harvard--ToolRAG-T1-GTE-Qwen2-1.5B"
+    tooluniverse_installed || { fail "ToolUniverse is not installed — run: aistackInstallTooluniverseTools"; return 1; }
+    tooluniverse_up || { fail "Nothing answers on port ${TOOLUNIVERSE_PORT} — start it: aistackLaunchInferenceStartTools"; return 1; }
+    [ -f "${MCP_HOME:-$HOME/.aistack/mcp}/${name}/server.json" ] \
+        || { fail "No MCP connector '${name}' — register it: aistackMcpAdd ${name} --url http://127.0.0.1:${TOOLUNIVERSE_PORT}/mcp --no-auth"; return 1; }
+    root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    info "aistackLaunchInferenceWarmupTools — ToolRAG-T1 embedder + embedding cache"
+
+    # 1. the model: 5.75 GiB, resumable, once
+    if [ -d "$snap/snapshots" ] && ! ls "$snap"/blobs/*.incomplete >/dev/null 2>&1; then
+        ok "Embedder present: $(du -sh "$snap" 2>/dev/null | cut -f1) — ${snap}"
+    else
+        info "Downloading mims-harvard/ToolRAG-T1-GTE-Qwen2-1.5B (5.75 GiB)..."
+        [ -x "$py" ] || py=python3
+        "$py" -c 'from huggingface_hub import snapshot_download as s; print(s("mims-harvard/ToolRAG-T1-GTE-Qwen2-1.5B"))' \
+            || { fail "Download failed."; return 1; }
+        ok "Embedder downloaded: $(du -sh "$snap" 2>/dev/null | cut -f1)"
+    fi
+
+    # 2. the cache — always through the running server. A .pt on disk proves
+    #    nothing about THIS server: the key is the exact tool set it loaded.
+    #    If the cache matches, this returns in seconds; if not, the server
+    #    encodes every loaded description now (minutes, once) and writes it.
+    local total
+    total=$( ( set +u; . "$root/mcp.sh"; aistackMcpCall "$name" list_tools '{"mode":"names","limit":1}' 2>/dev/null ) \
+             | python3 -c 'import json,sys; d=json.load(sys.stdin); d=json.loads(d) if isinstance(d,str) else d; print(d.get("total_tools","?"))' 2>/dev/null)
+    info "Warming Tool_RAG through the running server (${total:-?} tools loaded) — minutes on a first run, seconds after..."
+    t0=$(date +%s)
+    ( set +u; . "$root/mcp.sh"
+      AISTACK_MCP_TIMEOUT=3600 aistackMcpCall "$name" find_tools '{"query":"warm-up","limit":1,"search_method":"embedding"}' >/dev/null ) \
+        || { fail "Warm-up call failed — see ${TOOLUNIVERSE_LOG}"; return 1; }
+    cache=$(tooluniverseCacheFile)
+    ok "Warm-up call: $(( $(date +%s) - t0 )) s · cache: $(du -h "$cache" 2>/dev/null | cut -f1) ${cache:-"(no cache file found)"}"
+
+    # 3. a warm call, timed — this is what a session will feel
+    ms=$(python3 -c 'import time; print(int(time.time()*1000))')
+    ( set +u; . "$root/mcp.sh"
+      AISTACK_MCP_TIMEOUT=600 aistackMcpCall "$name" find_tools '{"query":"drug contraindication evidence","limit":5,"search_method":"embedding"}' >/dev/null ) \
+        || { fail "Warm call failed — see ${TOOLUNIVERSE_LOG}"; return 1; }
+    ms=$(( $(python3 -c 'import time; print(int(time.time()*1000))') - ms ))
+    ok "Warm Tool_RAG call: ${ms} ms  ($(grep -o '\[MyAiStack\] Tool_RAG embedder will load on [a-z0-9]* as [a-z0-9]*' "$TOOLUNIVERSE_LOG" 2>/dev/null | tail -1 | sed 's/.*load on //' || echo 'device: see log'))"
+    # memory, measured three ways — process RSS alone says little on unified memory
+    local spid; spid=$(tooluniverseOurPids | head -1)
+    [ -n "$spid" ] && ok "Server RSS: $(ps -o rss= -p "$spid" | awk '{printf "%.2f GiB", $1/1048576}')  $(grep -o '\[MyAiStack\] embedder memory.*' "$TOOLUNIVERSE_LOG" 2>/dev/null | tail -1 | sed 's/\[MyAiStack\] //')"
+    ok "Host: $(vm_stat | awk '/Pages free/ {f=$3} /Pages inactive/ {i=$3} /Pages wired/ {w=$4} END {gsub(/\./,"",f); gsub(/\./,"",i); gsub(/\./,"",w); printf "free+inactive %.1f GiB · wired %.1f GiB", (f+i)*16384/2**30, w*16384/2**30}') · swap $(sysctl -n vm.swapusage | awk '{print $6}' ) used"
 }
 
 # The mirror of StartTools: declining has to actively remove a server that is

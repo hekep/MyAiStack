@@ -56,7 +56,9 @@ MyAiStack
 │   └── ToolUniverse .. biomedical tools, Tool_RAG, Finish  ·  default no
 │       ├── port ...... 8765                       (TOOLUNIVERSE_PORT)
 │       ├── flags ..... --compact-mode             (TOOLUNIVERSE_ARGS)
-│       └── reached .. via MCP connector 'tooluniverse' → generated Pi plugin
+│       ├── embedder .. ToolRAG-T1 on Metal fp16    (TOOLUNIVERSE_DEVICE / _DTYPE)
+│       └── reached .. via MCP connector 'tooluniverse' → Pi plugin in loader mode:
+│                      the model calls Tool_RAG(description, limit), gets tools by name
 │
 ├── Models                      weights on disk, one menu per installed engine
 │   └── (see each engine's catalog above — models are never engine-portable)

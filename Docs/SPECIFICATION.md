@@ -243,6 +243,51 @@ chooses CUDA or CPU, never Metal, so on a Mac that is a CPU job.
 Process matching is by **port**, as for the proxy and llama-server: a server on
 the port that is not ours is reported, never killed.
 
+### Tool_RAG — the retrieval the model was trained on
+
+The embedder behind ToolUniverse's `Tool_RAG` / `find_tools` is
+`mims-harvard/ToolRAG-T1-GTE-Qwen2-1.5B`. It is loaded **lazily, inside the
+server**, on the first embedding call, and its work is cached as one tensor of
+every loaded tool description under `~/Library/Caches/ToolUniverse/embeddings/`
+(`TOOLUNIVERSE_TMPDIR` moves it), keyed by an MD5 of the loaded tool set. There
+is no separate retrieval service in the original stack and none here.
+
+ToolUniverse picks CUDA or CPU and nothing else. `MacOs/tooluniverseServer.py`
+is the same server with that one method replaced so the embedder runs on
+**Metal in fp16** (`TOOLUNIVERSE_DEVICE`, `TOOLUNIVERSE_DTYPE`); the launcher
+and the install step start it through the tool's own interpreter, and fall
+back to the console script when it is missing. Debian runs the console script
+on the CPU. `aistackLaunchInferenceWarmupTools` downloads the model and has the
+running server build the cache once; the install step offers it, default no.
+It must go through the same server invocation the launcher uses — a different
+tool set is a different cache.
+
+Measured on the reference Mac, ToolUniverse 1.4.1 with 2602 tools loaded (the count is version-dependent; the warm-up prints the live one), top-5:
+
+| | Metal fp16 | CPU fp32 |
+|---|---|---|
+| one-time encode of every tool description | 377 s | 753 s |
+| model + cache load on the first call | inside the encode | 13.5 s |
+| warm `find_tools` | 0.4–1.5 s | 0.5–0.6 s |
+| server RSS with the embedder loaded | 0.85 GiB (Metal buffers are outside RSS) | 5.6 GiB |
+| embedding cache on disk | 7.6 MB (fp16) | 15.9 MB (fp32) |
+| top-5 agreement on three queries | identical | identical |
+
+Per-query latency is the RPC path, not the model; Metal's win is memory.
+
+### Loader mode
+
+When a server offers a finder that returns tool specs and a dispatcher that
+runs any tool by name — ToolUniverse's `find_tools` and `execute_tool` —
+`aistackMcpBuild` writes `loader.json` beside `tools.json`, and the generated
+Pi extension changes shape: the model gets **one** tool,
+`Tool_RAG(description, limit)`, the discovery tools stay hidden, the tools the
+server retrieves are registered on the spot (Pi activates newly registered
+tools itself) and their specs come back as text — the format ATHENA-R1
+learned. A call to a retrieved tool goes through `execute_tool`. `Finish` and
+`finish` both end the turn. A server without that shape (Aidlab) gets no
+`loader.json` and the plain extension, byte for byte.
+
 ## System prompts
 
 `SystemPrompts/<genre>.txt`, one file per genre, offered as a numbered menu
@@ -300,7 +345,7 @@ shell reveals the whole toolkit. Scripts keep plain names.
 |---|---|---|---|
 | `aistackInstall*` | install one layer member | 19 | 18 |
 | `aistackUninstall*` | remove one layer member | 20 | 19 |
-| `aistackLaunchInference*` | serve a model, attach an agent, front it with a proxy, start a tool server | 23 | 17 |
+| `aistackLaunchInference*` | serve a model, attach an agent, front it with a proxy, start and warm up a tool server | 24 | 18 |
 | `aistackModelTest*` | verify one engine + model | 15 | 15 |
 | `aistackMcp*` | connect an MCP server, generate agent plugins | 11 | — |
 | `aistackConvert*` | turn upstream weights into something an engine serves | 4 | — |
@@ -424,6 +469,9 @@ Two deliberate refusals, both load-bearing:
 | `LITELLM_PORT` / `LITELLM_CONFIG` | proxy port (4000) and its generated config | macOS |
 | `AISTACK_PROXY_LOG` | where the proxy records requests | macOS |
 | `TOOLUNIVERSE_PORT` / `TOOLUNIVERSE_ARGS` / `TOOLUNIVERSE_LOG` | tool server port (8765), its flags (`--compact-mode`), its log | both |
+| `TOOLUNIVERSE_DEVICE` / `TOOLUNIVERSE_DTYPE` | where the Tool_RAG embedder runs (`mps` default, `cpu`) and in what precision (`float16` on Metal) | macOS |
+| `TOOLUNIVERSE_TMPDIR` | where ToolUniverse keeps the embedding cache | both |
+| `AISTACK_MCP_TIMEOUT` | seconds one MCP call may take (90); the warm-up sets it to an hour | both |
 | `AISTACK_MCP_MAX_RECORDS` | summarise a tool result above N records; 0 (default) hands back the server's response verbatim | both |
 | `MCP_CALLBACK_PORT` | OAuth loopback port (49999) — must match what was registered | both |
 | `MLX_CONVERT_DIR` | where converted models are written (default `~/Models/mlx`) | macOS |
@@ -490,6 +538,15 @@ Hard-won, and cheap to re-break. These are the macOS-side traps; the Linux ones
   the server does not touch it; the first `find_tools` call does — a 5.75 GiB
   download and a CPU load. A step that reports "started" must never be the one
   that triggers a first call.
+- **ToolUniverse's embedding cache is keyed on the loaded tool set.** Warm it
+  up through the same server invocation the launcher uses; a Python one-liner
+  loads a different set and pays for a second full encode.
+- **ToolUniverse picks CUDA or CPU and nothing else.** On a Mac the embedder
+  runs on Metal only through `MacOs/tooluniverseServer.py`; the cache it writes
+  is device-independent.
+- **The shell that runs a script matters.** zsh does not word-split
+  `set -- $var`; a comparison loop written for bash silently passed
+  "tu2 mps" as one argument. Run test scripts with `bash file.sh`.
 - **`--jinja` did not improve llama.cpp tool calling here** — it produced bare
   dates where the default produced correct ISO timestamps. Measured, not
   assumed, and the launcher deliberately does not pass it.

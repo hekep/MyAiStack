@@ -1261,7 +1261,14 @@ _aiStackToolsConnect() {
     fi
     info "Starting ToolUniverse on ${url} for the build (${TOOLUNIVERSE_ARGS}) — log: ${log}"
     # shellcheck disable=SC2086  # TOOLUNIVERSE_ARGS is a flag list by design
-    nohup tooluniverse-smcp-server --host 127.0.0.1 --port "${TOOLUNIVERSE_PORT}" ${TOOLUNIVERSE_ARGS} >"$log" 2>&1 </dev/null &
+    # tooluniverseServer.py = the same server with the Tool_RAG embedder on Metal
+    local py="$HOME/.local/share/uv/tools/tooluniverse/bin/python" wrapper
+    wrapper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tooluniverseServer.py"
+    if [ -x "$py" ] && [ -f "$wrapper" ]; then
+        nohup "$py" "$wrapper" --host 127.0.0.1 --port "${TOOLUNIVERSE_PORT}" ${TOOLUNIVERSE_ARGS} >"$log" 2>&1 </dev/null &
+    else
+        nohup tooluniverse-smcp-server --host 127.0.0.1 --port "${TOOLUNIVERSE_PORT}" ${TOOLUNIVERSE_ARGS} >"$log" 2>&1 </dev/null &
+    fi
     pid=$!
     while [ "$t" -lt 180 ]; do
         code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url" 2>/dev/null)
@@ -1277,6 +1284,15 @@ _aiStackToolsConnect() {
         ( set +u; . "$root/mcp.sh" && aistackMcpBuild tooluniverse ) || rc=1
     else
         ( set +u; . "$root/mcp.sh" && aistackMcpAdd tooluniverse --url "$url" --no-auth ) || rc=1
+    fi
+    if [ "$rc" -eq 0 ]; then
+        echo "    Tool_RAG needs its embedding model (a 5.75 GiB download) and an embedding of"
+        echo "    every tool description (minutes, once). Without them the first Tool_RAG call"
+        echo "    in a session stalls. Later:  aistackLaunchInferenceWarmupTools"
+        if ask_def "Download the Tool_RAG embedder and build its cache now?" "n"; then
+            ( set +u; . "$(dirname "${BASH_SOURCE[0]}")/launchInference.sh"; aistackLaunchInferenceWarmupTools ) \
+                || warn "Warm-up did not finish — run it later: aistackLaunchInferenceWarmupTools"
+        fi
     fi
     kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
     ok "ToolUniverse stopped — the launcher starts it when you say yes to it."

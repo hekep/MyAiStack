@@ -1754,6 +1754,15 @@ _aiStackToolsConnect() {
     else
         ( set +u; . "$root/mcp.sh" && aistackMcpAdd tooluniverse --url "$url" --no-auth ) || rc=1
     fi
+    if [ "$rc" -eq 0 ]; then
+        echo "    Tool_RAG needs its embedding model (a 5.75 GiB download) and an embedding of"
+        echo "    every tool description (minutes, once). Without them the first Tool_RAG call"
+        echo "    in a session stalls. Later:  aistackLaunchInferenceWarmupTools"
+        if ask_def "Download the Tool_RAG embedder and build its cache now?" "n"; then
+            ( set +u; . "$(dirname "${BASH_SOURCE[0]}")/launchInference.sh"; aistackLaunchInferenceWarmupTools ) \
+                || warn "Warm-up did not finish — run it later: aistackLaunchInferenceWarmupTools"
+        fi
+    fi
     kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
     ok "ToolUniverse stopped — the launcher starts it when you say yes to it."
     [ "$rc" -eq 0 ] || warn "Connector step failed — retry with the server running: aistackMcpBuild tooluniverse"
