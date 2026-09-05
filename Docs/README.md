@@ -8,7 +8,7 @@ operating system lives in that platform's folder instead.
 
 | Document | What it answers |
 |---|---|
-| [SPECIFICATION.md](SPECIFICATION.md) | **The contract.** What the project is, the four layers, the naming rule, and the nine invariants every change must keep. |
+| [SPECIFICATION.md](SPECIFICATION.md) | **The contract.** What the project is, the five layers, the naming rule, and the nine invariants every change must keep. |
 | [DecisionTree.md](DecisionTree.md) | **The shape.** Every choice the stack offers, and what each choice determines — catalog, model ID format, quant ladder, download location. |
 | [PlatformNotes.md](PlatformNotes.md) | **The delta.** What macOS and Debian share, where they diverge, and why. Most apparent inconsistencies between the two implementations are platform facts recorded here; the rest are traps somebody already fell into. |
 

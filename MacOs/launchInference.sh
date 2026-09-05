@@ -148,6 +148,26 @@ litellmKillOurs() { pkill  -f "litellm .*--port ${LITELLM_PORT}" 2>/dev/null; }
 litellm_up() { curl -sf --max-time 3 "http://127.0.0.1:${LITELLM_PORT}/health/liveliness" >/dev/null 2>&1 \
                || curl -sf --max-time 3 "http://127.0.0.1:${LITELLM_PORT}/v1/models" >/dev/null 2>&1; }
 
+# --- tools layer: ToolUniverse ------------------------------------------------
+# A local MCP tool server (biomedical tools, Tool_RAG, Finish) the launched
+# model calls through the generated Pi plugin (mcp.sh). Port 8765 because 8080
+# is llama.cpp, 8000 — ToolUniverse's own default — is what ATHENA-R1 gives to
+# vLLM, and 5000/7000 belong to macOS AirPlay. Compact mode exposes four
+# discovery/execute tools and loads the rest behind them; TOOLUNIVERSE_ARGS
+# replaces that with e.g. "--categories tool_finder special_tools fda_drug_label".
+TOOLUNIVERSE_PORT="${TOOLUNIVERSE_PORT:-8765}"
+TOOLUNIVERSE_ARGS="${TOOLUNIVERSE_ARGS:---compact-mode}"
+TOOLUNIVERSE_LOG="${TOOLUNIVERSE_LOG:-$HOME/.aistack/tooluniverse.log}"
+tooluniverse_installed() { command -v tooluniverse-smcp-server >/dev/null 2>&1 \
+                           || { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^tooluniverse'; }; }
+# Only OUR server: the one on our port. Same port-scoped match as the proxy.
+tooluniverseOurPids()  { pgrep -f "tooluniverse-smcp-server .*--port ${TOOLUNIVERSE_PORT}" 2>/dev/null; }
+tooluniverseKillOurs() { pkill  -f "tooluniverse-smcp-server .*--port ${TOOLUNIVERSE_PORT}" 2>/dev/null; }
+# True when something answers on the port. MCP streamable-http rejects a bare
+# GET with a 4xx, so any HTTP status at all means a server is there.
+tooluniverse_up() { local c; c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
+                        "http://127.0.0.1:${TOOLUNIVERSE_PORT}/mcp" 2>/dev/null); [ -n "$c" ] && [ "$c" != "000" ]; }
+
 # Longest context a llama.cpp model was trained for. Args: <tag>.
 # Read straight out of the GGUF header, so it costs a few kilobytes and no model
 # load. llama-server will happily accept -c far above this: it splits the request
@@ -979,6 +999,76 @@ aistackLaunchInferenceStopProxy() {
     ok "Proxy stopped — the agent will talk to the engine directly."
 }
 
+# ---------- 5c. tools layer: ToolUniverse -------------------------------------
+# Asked after the proxy, with the same two-way answer: yes (re)starts our
+# server, no removes one that is already there. Default no — it is a second
+# Python process most coding sessions have no use for. Prints yes|no, and prints
+# no without asking when ToolUniverse is not installed.
+aistackLaunchInferenceToolsSelector() {
+    tooluniverse_installed || { echo "no"; return 0; }
+    echo >&2
+    echo "${BOLD}Tool server${RESET}" >&2
+    echo "    ToolUniverse serves biomedical tools over MCP on port ${TOOLUNIVERSE_PORT}:" >&2
+    echo "    Tool_RAG, Finish and the FDA / ChEMBL / Open Targets tools ATHENA-R1 was" >&2
+    echo "    trained on. The model reaches them through the generated Pi plugin." >&2
+    [ -n "$(tooluniverseOurPids)" ] && echo "    (ours is running now — no stops it, yes restarts it)" >&2
+    if ask_ny "Launch ToolUniverse?"; then echo "yes"; else echo "no"; fi
+}
+
+# Start our ToolUniverse MCP server in the background on TOOLUNIVERSE_PORT,
+# logging to TOOLUNIVERSE_LOG, and wait until the port answers — the first
+# start loads every tool config, which takes tens of seconds. A server on the
+# port that is not ours is left alone. Builds the connector's tool list when it
+# has never been built, because that list is what the Pi plugin registers.
+aistackLaunchInferenceStartTools() {
+    tooluniverse_installed || { fail "ToolUniverse is not installed — run: aistackInstallTooluniverseTools"; return 1; }
+    if [ -z "$(tooluniverseOurPids)" ] && tooluniverse_up; then
+        warn "Something else is serving port ${TOOLUNIVERSE_PORT} — left running, it is not ours."
+        return 1
+    fi
+    [ -n "$(tooluniverseOurPids)" ] && aistackLaunchInferenceStopTools
+    mkdir -p "$(dirname "$TOOLUNIVERSE_LOG")"
+    info "Starting ToolUniverse on 127.0.0.1:${TOOLUNIVERSE_PORT} (${TOOLUNIVERSE_ARGS}) — log: ${TOOLUNIVERSE_LOG}"
+    # shellcheck disable=SC2086  # TOOLUNIVERSE_ARGS is a flag list by design
+    nohup tooluniverse-smcp-server --host 127.0.0.1 --port "${TOOLUNIVERSE_PORT}" ${TOOLUNIVERSE_ARGS} \
+        >"$TOOLUNIVERSE_LOG" 2>&1 </dev/null &
+    local t=0
+    while [ "$t" -lt 180 ]; do
+        tooluniverse_up && break
+        if [ -z "$(tooluniverseOurPids)" ]; then
+            fail "ToolUniverse exited — last lines of ${TOOLUNIVERSE_LOG}:"; tail -5 "$TOOLUNIVERSE_LOG" >&2; return 1
+        fi
+        sleep 1; t=$((t+1))
+    done
+    tooluniverse_up || { fail "ToolUniverse did not answer within ${t} s — see ${TOOLUNIVERSE_LOG}"; return 1; }
+    ok "ToolUniverse up after ${t} s (pid $(tooluniverseOurPids | head -1))."
+    local mcpdir="${MCP_HOME:-$HOME/.aistack/mcp}/tooluniverse" root
+    if [ ! -f "$mcpdir/server.json" ]; then
+        warn "No 'tooluniverse' MCP connector — the model cannot see the server. Register it:"
+        warn "  aistackMcpAdd tooluniverse --url http://127.0.0.1:${TOOLUNIVERSE_PORT}/mcp --no-auth"
+    elif [ ! -f "$mcpdir/tools.json" ]; then
+        info "No tool list yet — building the connector plugins..."
+        root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+        ( set +u; . "$root/mcp.sh" && aistackMcpBuild tooluniverse ) || warn "Build failed — run: aistackMcpBuild tooluniverse"
+    fi
+}
+
+# The mirror of StartTools: declining has to actively remove a server that is
+# already there, or "no" would leave a stale one running. Not ours: left alone.
+aistackLaunchInferenceStopTools() {
+    local pids; pids=$(tooluniverseOurPids | tr '\n' ' ')
+    if [ -z "$pids" ]; then
+        tooluniverse_up && warn "Something else is serving port ${TOOLUNIVERSE_PORT} — left running, it is not ours."
+        return 0
+    fi
+    info "Stopping our ToolUniverse server (pid ${pids%% })..."
+    tooluniverseKillOurs
+    local t=0
+    while [ "$t" -lt 20 ] && [ -n "$(tooluniverseOurPids)" ]; do sleep 1; t=$((t+1)); done
+    [ -n "$(tooluniverseOurPids)" ] && tooluniverseOurPids | xargs -r kill -9 2>/dev/null
+    ok "ToolUniverse stopped."
+}
+
 # ---------- 5b. reuse an identical running server ----------------------------
 # True when what is already serving is exactly what this launch would start.
 # Args: <engine> <model> <ctx> <bind>. Reloading a model that is already
@@ -1287,6 +1377,11 @@ aistackLaunchInferenceKillPrevious() {
     if [ -n "$(litellmOurPids)" ]; then
         litellmKillOurs && ok "Stopped our LiteLLM proxy — it pointed at the previous model."
     fi
+    # The tool server holds no weights either, and it is asked about again once
+    # the engine is up — so a running one is torn down here the same quiet way.
+    if [ -n "$(tooluniverseOurPids)" ]; then
+        tooluniverseKillOurs && ok "Stopped our ToolUniverse server — it is offered again after the launch."
+    fi
 
     rows=$(runningEngines)
     if [ -z "$rows" ]; then
@@ -1371,7 +1466,7 @@ aistackLaunchInferenceFreeResources() {
             finder) continue ;;
             # the stack itself: engines, and the monitoring tools that exist to
             # watch this very run — closing them would defeat the purpose
-            ollama*|*llama-server*|*mlx*|anubis*|macmon*|litellm*)
+            ollama*|*llama-server*|*mlx*|anubis*|macmon*|litellm*|tooluniverse*)
                 hidden_stack=$((hidden_stack+1)); continue ;;
         esac
         mem_mb=$(ps -axo rss=,command= | awk -v app="$(echo "$name" | tr '[:upper:]' '[:lower:]').app/" '
@@ -1905,6 +2000,12 @@ aistackLaunchInference() {
         aistackLaunchInferenceStartProxy "$engine" "$model" "$bind" || true
     else
         aistackLaunchInferenceStopProxy
+    fi
+    # The tool server gets the same two-way question, for the same reason.
+    if [ "$(aistackLaunchInferenceToolsSelector)" = "yes" ]; then
+        aistackLaunchInferenceStartTools || true
+    else
+        aistackLaunchInferenceStopTools
     fi
     agent=$(aistackLaunchInferenceAgentSelector "$engine")
     LAUNCH_SYSPROMPT=$(aistackLaunchInferenceSystemPromptSelector "$model")

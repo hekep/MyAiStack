@@ -14,7 +14,7 @@ into.
 
 **The contract is identical. Only the primitives differ.**
 
-Everything in SPECIFICATION.md holds on both platforms: the four layers, the
+Everything in SPECIFICATION.md holds on both platforms: the five layers, the
 `aistack` naming, the nine invariants, install/uninstall ordering, the model
 gate, "measured never estimated", "one question at a time", "Enter is safe".
 

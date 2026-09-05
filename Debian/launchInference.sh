@@ -202,6 +202,25 @@ llamacppKillOurs() { pkill  -f "llama-server .*--port ${LLAMACPP_PORT}" 2>/dev/n
 # True when the ollama binary is on PATH.
 ollama_installed()   { command -v ollama >/dev/null 2>&1; }
 
+# --- tools layer: ToolUniverse ------------------------------------------------
+# A local MCP tool server (biomedical tools, Tool_RAG, Finish) the launched
+# model calls through the generated Pi plugin (mcp.sh). Port 8765: 8080 is
+# llama.cpp and 8000 — ToolUniverse's own default — is what ATHENA-R1 gives to
+# vLLM. Compact mode exposes four discovery/execute tools and loads the rest
+# behind them; TOOLUNIVERSE_ARGS replaces that, e.g. "--categories tool_finder".
+TOOLUNIVERSE_PORT="${TOOLUNIVERSE_PORT:-8765}"
+TOOLUNIVERSE_ARGS="${TOOLUNIVERSE_ARGS:---compact-mode}"
+TOOLUNIVERSE_LOG="${TOOLUNIVERSE_LOG:-$HOME/.aistack/tooluniverse.log}"
+tooluniverse_installed() { command -v tooluniverse-smcp-server >/dev/null 2>&1 \
+                           || { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^tooluniverse'; }; }
+# Only OUR server: the one on our port.
+tooluniverseOurPids()  { pgrep -f "tooluniverse-smcp-server .*--port ${TOOLUNIVERSE_PORT}" 2>/dev/null; }
+tooluniverseKillOurs() { pkill  -f "tooluniverse-smcp-server .*--port ${TOOLUNIVERSE_PORT}" 2>/dev/null; }
+# True when something answers on the port. MCP streamable-http rejects a bare
+# GET with a 4xx, so any HTTP status at all means a server is there.
+tooluniverse_up() { local c; c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
+                        "http://127.0.0.1:${TOOLUNIVERSE_PORT}/mcp" 2>/dev/null); [ -n "$c" ] && [ "$c" != "000" ]; }
+
 # The directory Ollama stores manifests and blobs in.
 # Linux has two possible locations — the system service's /usr/share/ollama and
 # your own ~/.ollama — so every path goes through here.
@@ -827,6 +846,11 @@ aistackLaunchInferenceAgentSelector() {
 # switching engines. Declining is fine — the new model just gets less memory.
 aistackLaunchInferenceKillPrevious() {
     local target="${1:-}" rows eng what mem killed=0
+    # The tool server holds no weights, and it is asked about again once the
+    # engine is up — so a running one is torn down here quietly, ours only.
+    if [ -n "$(tooluniverseOurPids)" ]; then
+        tooluniverseKillOurs && ok "Stopped our ToolUniverse server — it is offered again after the launch."
+    fi
     rows=$(runningEngines)
     if [ -z "$rows" ]; then
         ok "No inference engine is running — all memory is free for this launch."
@@ -871,6 +895,76 @@ aistackLaunchInferenceKillPrevious() {
 
     [ "$killed" -eq 1 ] && sleep 2
     ok "Memory available now: $(availMemGbF) GB"
+}
+
+# ---------- 4d. tools layer: ToolUniverse -------------------------------------
+# Asked once the engine is up, with a two-way answer: yes (re)starts our server,
+# no removes one that is already there. Default no — it is a second Python
+# process most coding sessions have no use for. Prints yes|no, and prints no
+# without asking when ToolUniverse is not installed.
+aistackLaunchInferenceToolsSelector() {
+    tooluniverse_installed || { echo "no"; return 0; }
+    echo >&2
+    echo "${BOLD}Tool server${RESET}" >&2
+    echo "    ToolUniverse serves biomedical tools over MCP on port ${TOOLUNIVERSE_PORT}:" >&2
+    echo "    Tool_RAG, Finish and the FDA / ChEMBL / Open Targets tools ATHENA-R1 was" >&2
+    echo "    trained on. The model reaches them through the generated Pi plugin." >&2
+    [ -n "$(tooluniverseOurPids)" ] && echo "    (ours is running now — no stops it, yes restarts it)" >&2
+    if ask_ny "Launch ToolUniverse?"; then echo "yes"; else echo "no"; fi
+}
+
+# Start our ToolUniverse MCP server in the background on TOOLUNIVERSE_PORT,
+# logging to TOOLUNIVERSE_LOG, and wait until the port answers — the first
+# start loads every tool config, which takes tens of seconds. A server on the
+# port that is not ours is left alone. Builds the connector's tool list when it
+# has never been built, because that list is what the Pi plugin registers.
+aistackLaunchInferenceStartTools() {
+    tooluniverse_installed || { fail "ToolUniverse is not installed — run: aistackInstallTooluniverseTools"; return 1; }
+    if [ -z "$(tooluniverseOurPids)" ] && tooluniverse_up; then
+        warn "Something else is serving port ${TOOLUNIVERSE_PORT} — left running, it is not ours."
+        return 1
+    fi
+    [ -n "$(tooluniverseOurPids)" ] && aistackLaunchInferenceStopTools
+    mkdir -p "$(dirname "$TOOLUNIVERSE_LOG")"
+    info "Starting ToolUniverse on 127.0.0.1:${TOOLUNIVERSE_PORT} (${TOOLUNIVERSE_ARGS}) — log: ${TOOLUNIVERSE_LOG}"
+    # shellcheck disable=SC2086  # TOOLUNIVERSE_ARGS is a flag list by design
+    nohup tooluniverse-smcp-server --host 127.0.0.1 --port "${TOOLUNIVERSE_PORT}" ${TOOLUNIVERSE_ARGS} \
+        >"$TOOLUNIVERSE_LOG" 2>&1 </dev/null &
+    local t=0
+    while [ "$t" -lt 180 ]; do
+        tooluniverse_up && break
+        if [ -z "$(tooluniverseOurPids)" ]; then
+            fail "ToolUniverse exited — last lines of ${TOOLUNIVERSE_LOG}:"; tail -5 "$TOOLUNIVERSE_LOG" >&2; return 1
+        fi
+        sleep 1; t=$((t+1))
+    done
+    tooluniverse_up || { fail "ToolUniverse did not answer within ${t} s — see ${TOOLUNIVERSE_LOG}"; return 1; }
+    ok "ToolUniverse up after ${t} s (pid $(tooluniverseOurPids | head -1))."
+    local mcpdir="${MCP_HOME:-$HOME/.aistack/mcp}/tooluniverse" root
+    if [ ! -f "$mcpdir/server.json" ]; then
+        warn "No 'tooluniverse' MCP connector — the model cannot see the server. Register it:"
+        warn "  aistackMcpAdd tooluniverse --url http://127.0.0.1:${TOOLUNIVERSE_PORT}/mcp --no-auth"
+    elif [ ! -f "$mcpdir/tools.json" ]; then
+        info "No tool list yet — building the connector plugins..."
+        root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+        ( set +u; . "$root/mcp.sh" && aistackMcpBuild tooluniverse ) || warn "Build failed — run: aistackMcpBuild tooluniverse"
+    fi
+}
+
+# The mirror of StartTools: declining has to actively remove a server that is
+# already there, or "no" would leave a stale one running. Not ours: left alone.
+aistackLaunchInferenceStopTools() {
+    local pids; pids=$(tooluniverseOurPids | tr '\n' ' ')
+    if [ -z "$pids" ]; then
+        tooluniverse_up && warn "Something else is serving port ${TOOLUNIVERSE_PORT} — left running, it is not ours."
+        return 0
+    fi
+    info "Stopping our ToolUniverse server (pid ${pids%% })..."
+    tooluniverseKillOurs
+    local t=0
+    while [ "$t" -lt 20 ] && [ -n "$(tooluniverseOurPids)" ]; do sleep 1; t=$((t+1)); done
+    [ -n "$(tooluniverseOurPids)" ] && tooluniverseOurPids | xargs -r kill -9 2>/dev/null
+    ok "ToolUniverse stopped."
 }
 
 # ---------- 5. free resources -------------------------------------------------
@@ -1539,6 +1633,12 @@ aistackLaunchInference() {
     aistackLaunchInferenceKillPrevious "$engine"
     aistackLaunchInferencePrerequisites "$engine" "$model" "$ctx" || return 1
     aistackLaunchInferenceStart "$engine" "$model" "$ctx" "$bind" || return 1
+    # Two-way answer: yes (re)starts the tool server, no removes a stale one.
+    if [ "$(aistackLaunchInferenceToolsSelector)" = "yes" ]; then
+        aistackLaunchInferenceStartTools || true
+    else
+        aistackLaunchInferenceStopTools
+    fi
     agent=$(aistackLaunchInferenceAgentSelector "$engine")
     aistackLaunchInferenceStartAgent "$agent" "$engine" "$model"
 }

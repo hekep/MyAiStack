@@ -52,6 +52,12 @@ MyAiStack
 │   ├── OpenCode ...... OpenAI-compatible ..... any engine    ·  default no
 │   └── Claude Code ... Anthropic Messages .... Ollama ONLY   ·  default no
 │
+├── Tools                       MCP servers the model calls; optional
+│   └── ToolUniverse .. biomedical tools, Tool_RAG, Finish  ·  default no
+│       ├── port ...... 8765                       (TOOLUNIVERSE_PORT)
+│       ├── flags ..... --compact-mode             (TOOLUNIVERSE_ARGS)
+│       └── reached .. via MCP connector 'tooluniverse' → generated Pi plugin
+│
 ├── Models                      weights on disk, one menu per installed engine
 │   └── (see each engine's catalog above — models are never engine-portable)
 │

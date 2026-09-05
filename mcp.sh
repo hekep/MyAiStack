@@ -181,20 +181,23 @@ _aiStackMcpRpc() {
     hdrs=$(mktemp) || return 1
     body=$(mktemp) || { rm -f "$hdrs"; return 1; }
 
+    local auth; auth=$(_aiStackMcpField "$name" auth)
     for attempt in 1 2; do
-        tok=$(_aiStackMcpBearer "$name") || { rm -f "$hdrs" "$body"; return 1; }
+        local -a extra=()
+        if [ "$auth" != "none" ]; then
+            tok=$(_aiStackMcpBearer "$name") || { rm -f "$hdrs" "$body"; return 1; }
+            extra=(-H "authorization: Bearer ${tok}")
+        fi
         sid=$(cat "$dir/.session" 2>/dev/null)
         id=$$$RANDOM
-        local -a extra=()
-        [ -n "$sid" ] && extra=(-H "mcp-session-id: ${sid}")
+        [ -n "$sid" ] && extra+=(-H "mcp-session-id: ${sid}")
         code=$(curl -s -o "$body" -D "$hdrs" -w '%{http_code}' --max-time 90 -X POST "$url" \
             -H 'content-type: application/json' \
             -H 'accept: application/json, text/event-stream' \
             -H "mcp-protocol-version: ${MCP_PROTOCOL}" \
-            -H "authorization: Bearer ${tok}" \
             ${extra[@]+"${extra[@]}"} \
             -d "{\"jsonrpc\":\"2.0\",\"id\":\"${id}\",\"method\":\"${method}\",\"params\":${params}}")
-        if [ "$code" = "401" ] && [ "$attempt" = "1" ]; then
+        if [ "$code" = "401" ] && [ "$attempt" = "1" ] && [ "$auth" != "none" ]; then
             _aiStackMcpRefresh "$name" || { rm -f "$hdrs" "$body"; return 1; }
             continue
         fi
@@ -244,15 +247,17 @@ _aiStackMcpNotify() {
     local name="$1" method="$2" url tok sid dir
     dir=$(_aiStackMcpDir "$name")
     url=$(_aiStackMcpField "$name" url) || return 1
-    tok=$(_aiStackMcpBearer "$name") || return 1
-    sid=$(cat "$dir/.session" 2>/dev/null)
     local -a extra=()
-    [ -n "$sid" ] && extra=(-H "mcp-session-id: ${sid}")
+    if [ "$(_aiStackMcpField "$name" auth)" != "none" ]; then
+        tok=$(_aiStackMcpBearer "$name") || return 1
+        extra=(-H "authorization: Bearer ${tok}")
+    fi
+    sid=$(cat "$dir/.session" 2>/dev/null)
+    [ -n "$sid" ] && extra+=(-H "mcp-session-id: ${sid}")
     curl -s -o /dev/null --max-time 30 -X POST "$url" \
         -H 'content-type: application/json' \
         -H 'accept: application/json, text/event-stream' \
         -H "mcp-protocol-version: ${MCP_PROTOCOL}" \
-        -H "authorization: Bearer ${tok}" \
         ${extra[@]+"${extra[@]}"} \
         -d "{\"jsonrpc\":\"2.0\",\"method\":\"${method}\"}"
 }
@@ -367,14 +372,18 @@ PY
 }
 
 aistackMcpAdd() {
-    if [ $# -lt 3 ] || [ "$2" != "--url" ]; then
-        aiStackUsage "aistackMcpAdd <name> --url <mcp-url>" \
+    if [ $# -lt 3 ] || [ "$2" != "--url" ] || { [ $# -ge 4 ] && [ "$4" != "--no-auth" ]; }; then
+        aiStackUsage "aistackMcpAdd <name> --url <mcp-url> [--no-auth]" \
             "name    : [a-z][a-z0-9-]* — becomes /mcp-<name> in Pi and the tool prefix" \
             "url     : the server's MCP endpoint" \
-            "example : aistackMcpAdd aidlab --url https://my.aidlab.com/mcp"
+            "no-auth : the server needs no sign-in — a local one such as ToolUniverse." \
+            "          Skips OAuth entirely: no registration, no tokens, no browser." \
+            "example : aistackMcpAdd aidlab --url https://my.aidlab.com/mcp" \
+            "example : aistackMcpAdd tooluniverse --url http://127.0.0.1:8765/mcp --no-auth"
         return 2
     fi
-    local name="$1" url="$3" dir backup=""
+    local name="$1" url="$3" dir backup="" auth="oauth"
+    [ "${4:-}" = "--no-auth" ] && auth="none"
     case "$name" in
         [a-z]*) case "$name" in *[!a-z0-9-]*) fail "name must match [a-z][a-z0-9-]* — got '${name}'."; return 1 ;; esac ;;
         *) fail "name must start with a lowercase letter — got '${name}'."; return 1 ;;
@@ -382,9 +391,14 @@ aistackMcpAdd() {
     dir=$(_aiStackMcpDir "$name")
 
     if [ -f "$dir/server.json" ]; then
-        ok "Connector '${name}' is already registered as $(_aiStackMcpField "$name" client_id)."
-        warn "Re-registering asks the provider for a NEW client and deletes the stored"
-        warn "tokens, so you would sign in again with: aistackMcpLogin ${name}"
+        if [ "$(_aiStackMcpField "$name" auth)" = "none" ]; then
+            ok "Connector '${name}' is already registered (no sign-in)."
+            warn "Re-registering only rewrites its record and drops its tool list."
+        else
+            ok "Connector '${name}' is already registered as $(_aiStackMcpField "$name" client_id)."
+            warn "Re-registering asks the provider for a NEW client and deletes the stored"
+            warn "tokens, so you would sign in again with: aistackMcpLogin ${name}"
+        fi
         warn "To refresh only its tools and agent plugins, keeping the login, run:"
         warn "  aistackMcpBuild ${name}"
         ask_def "Remove '${name}' and register it again?" "y" || { ok "Kept as it is."; return 0; }
@@ -398,7 +412,9 @@ aistackMcpAdd() {
     fi
 
     mkdir -p "$dir"
-    if ! _aiStackMcpRegister "$name" "$url" "$dir"; then
+    if [ "$auth" = "none" ]; then
+        _aiStackMcpRecordNoAuth "$name" "$url" "$dir" || { rm -rf "$dir"; [ -n "$backup" ] && mv "$backup" "$dir"; return 1; }
+    elif ! _aiStackMcpRegister "$name" "$url" "$dir"; then
         rm -rf "$dir"
         if [ -n "$backup" ]; then
             mv "$backup" "$dir"
@@ -408,8 +424,12 @@ aistackMcpAdd() {
         return 1
     fi
     [ -n "$backup" ] && rm -rf "$backup"
-    ok "Registered — client_id $(_aiStackMcpField "$name" client_id)"
-    ok "Scopes: $(_aiStackMcpField "$name" scopes)"
+    if [ "$auth" = "none" ]; then
+        ok "Registered — ${url}, no sign-in."
+    else
+        ok "Registered — client_id $(_aiStackMcpField "$name" client_id)"
+        ok "Scopes: $(_aiStackMcpField "$name" scopes)"
+    fi
 
     # 5. which installed agents should see this connector? Agents that are not
     #    installed are not offered — a question with one answer is not a question.
@@ -419,10 +439,40 @@ aistackMcpAdd() {
     # single tool until someone signs in. Offer the next step rather than
     # printing it, but only where an answer can actually be given — a script
     # must never have a browser opened underneath it.
-    if _aiStackMcpInteractive && ask_def "Sign in to '${name}' now?" "y"; then
+    if [ "$auth" = "none" ]; then
+        # nothing to sign in to — the useful next step is listing the tools,
+        # which needs the server answering on its URL
+        if _aiStackMcpInteractive && ask_def "Build the agent plugins for '${name}' now? (server must be running)" "y"; then
+            aistackMcpBuild "$name"
+        else
+            warn "Next, with the server running:  aistackMcpBuild ${name}"
+        fi
+    elif _aiStackMcpInteractive && ask_def "Sign in to '${name}' now?" "y"; then
         aistackMcpLogin "$name"
     else
         warn "Next:  aistackMcpLogin ${name}"
+    fi
+}
+
+# Write the record for a server that needs no authentication. Args: <name> <url>
+# <target-dir>. Same file the OAuth path writes, minus everything about tokens;
+# "auth": "none" is what every reader checks. Reachability is reported, not
+# required — a local server is usually started later by the launcher.
+_aiStackMcpRecordNoAuth() {
+    local name="$1" url="$2" dir="$3" code
+    python3 - "$dir" "$name" "$url" <<'PY' || return 1
+import json, sys, datetime
+d, name, url = sys.argv[1:4]
+json.dump({
+    "name": name, "url": url, "auth": "none", "agents": {},
+    "added": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+}, open(f"{d}/server.json", "w"), indent=2)
+PY
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null)
+    if [ -z "$code" ] || [ "$code" = "000" ]; then
+        warn "Nothing answers at ${url} right now — fine for registering; the build needs it up."
+    else
+        ok "Server answers at ${url} (HTTP ${code})."
     fi
 }
 
@@ -477,6 +527,11 @@ aistackMcpLogin() {
     local name="$1" dir
     _aiStackMcpRequire "$name" || return 1
     dir=$(_aiStackMcpDir "$name")
+    if [ "$(_aiStackMcpField "$name" auth)" = "none" ]; then
+        ok "'${name}' needs no sign-in — building its tool list and plugins instead."
+        aistackMcpBuild "$name"
+        return
+    fi
 
     if lsof -nP -iTCP:"${MCP_CALLBACK_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
         fail "Port ${MCP_CALLBACK_PORT} is busy — the registered callback needs exactly this port:"
@@ -806,6 +861,7 @@ try:
     tok = f"valid {left//60} min" if left > 0 else ("expired, will refresh" if t.get("refresh_token") else "expired, sign in")
 except FileNotFoundError:
     tok = "not signed in"
+if s.get("auth") == "none": tok = "none needed"
 try: n = len(json.load(open(f"{d}/tools.json"))["tools"])
 except FileNotFoundError: n = 0
 wired = []
@@ -838,6 +894,7 @@ aistackMcpRefresh() {
         return 2
     fi
     _aiStackMcpRequire "$1" || return 1
+    [ "$(_aiStackMcpField "$1" auth)" = "none" ] && { ok "'$1' has no tokens — nothing to refresh."; return 0; }
     _aiStackMcpRefresh "$1" && ok "$1: token refreshed."
 }
 
@@ -851,6 +908,7 @@ aistackMcpLogout() {
     fi
     local name="$1" dir
     _aiStackMcpRequire "$name" || return 1
+    [ "$(_aiStackMcpField "$name" auth)" = "none" ] && { ok "'${name}' has no tokens — nothing to sign out of."; return 0; }
     dir=$(_aiStackMcpDir "$name")
     [ -f "$dir/tokens.json" ] || { ok "${name}: already signed out."; return 0; }
     rm -f "$dir/tokens.json" "$dir/.session"

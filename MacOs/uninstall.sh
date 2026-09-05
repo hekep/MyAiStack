@@ -8,6 +8,8 @@
 # in the name are engine-specific; the others apply to the stack as a whole.
 #
 #   aistackUninstallOllamaModels         the models   <- GATE for everything below
+#   --- tools: MCP tool servers; only their generated plugins depend on them ---
+#   aistackUninstallTooluniverseTools    ToolUniverse (+ connector, caches)
 #   --- monitoring: observational, nothing depends on it (macOS-specific) ---
 #   aistackUninstallMacmonMonitoring     macmon
 #   aistackUninstallAnubisMonitoring     Anubis OSS
@@ -457,6 +459,38 @@ aistackUninstallLitellmMonitoring() {
     fi
 }
 
+# ---------- layer: tools -----------------------------------------------------
+# MCP tool servers. Nothing depends on them except the generated agent plugins,
+# which go with them. After monitoring, before the coding agents they plug into.
+
+# Remove ToolUniverse: stop a running server, drop the uv tool, then offer the
+# MCP connector (generated plugins, tool list) and the caches — embeddings under
+# ~/Library/Caches/ToolUniverse and the ToolRAG-T1 embedder (5.75 GiB) in the
+# HuggingFace cache — as separate questions: cheap to keep, slow to get back.
+aistackUninstallTooluniverseTools() {
+    info "aistackUninstallTooluniverseTools — ToolUniverse"
+    if ! command -v uv >/dev/null 2>&1 || ! uv tool list 2>/dev/null | grep -q '^tooluniverse'; then
+        ok "ToolUniverse not installed — nothing to do."
+        return 0
+    fi
+    ask_def "Uninstall ToolUniverse?" "n" || { ok "Keeping ToolUniverse."; return 0; }
+    pkill -f "tooluniverse-smcp-server" 2>/dev/null && ok "Stopped the running ToolUniverse server."
+    uv tool uninstall tooluniverse && ok "ToolUniverse removed." || fail "ToolUniverse removal failed."
+    local mcpdir="${MCP_HOME:-$HOME/.aistack/mcp}/tooluniverse" root c
+    if [ -d "$mcpdir" ]; then
+        root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+        if ask_def "Remove the 'tooluniverse' MCP connector (generated plugins, tool list)?" "y"; then
+            ( set +u; . "$root/mcp.sh" && aistackMcpRemove tooluniverse ) || warn "Run: aistackMcpRemove tooluniverse"
+        fi
+    fi
+    for c in "$HOME/Library/Caches/ToolUniverse" \
+             "${HF_HOME:-$HOME/.cache/huggingface}/hub/models--mims-harvard--ToolRAG-T1-GTE-Qwen2-1.5B"; do
+        [ -d "$c" ] || continue
+        warn "Cache: ${c} ($(sizeof "$c"))"
+        ask_def "Delete it as well?" "n" && { rm -rf "$c" && ok "Deleted."; }
+    done
+}
+
 # ---------- layer: coding agents ---------------------------------------------
 # The agents sit above the engines: they are what you type into. Removed before
 # any engine, so nothing is pulled out from under a working agent.
@@ -716,7 +750,7 @@ aistackUninstall() {
     if [ "$left" = "1" ]; then
         echo
         warn "${BOLD}Uninstallation stopped: models are still installed.${RESET}"
-        warn "Engines, agents, monitoring and uv are all kept — models depend on them."
+        warn "Engines, agents, tools, monitoring and uv are all kept — models depend on them."
         warn "Remove every model to continue, or run a single layer directly:"
         warn "  source uninstall.sh && aistackUninstallMacmonMonitoring"
         aistackUninstallVerification
@@ -727,6 +761,8 @@ aistackUninstall() {
     aistackUninstallMacmonMonitoring
     aistackUninstallAnubisMonitoring
     aistackUninstallLitellmMonitoring
+    # then the tool servers — only their generated plugins depend on them
+    aistackUninstallTooluniverseTools
 
     # then the coding agents — they sit above the engines
     aistackUninstallClaudeCodingAgent

@@ -8,7 +8,7 @@ generic documentation both folders sit under is in [`Docs/`](../Docs/README.md).
 **If you only read two things:**
 
 - [Docs/SPECIFICATION.md](../Docs/SPECIFICATION.md) — the contract both
-  platforms implement: four layers, the naming rule, the nine invariants.
+  platforms implement: five layers, the naming rule, the nine invariants.
 - [Docs/PlatformNotes.md](../Docs/PlatformNotes.md) — what differs between
   macOS and Debian, and why. Every deviation below is explained there.
 
@@ -49,8 +49,8 @@ generic folder:
 - [installAliases.sh](../Docs/installAliases.sh.md) — the shell integration.
   Editing a shell rc is identical on every platform, and `shellFunctions.sh`
   reads the function names out of whichever OS folder is detected. It needed
-  **no change** for this port; `aistackHelp` simply lists the 64 Debian step
-  functions instead of the 66 macOS ones.
+  **no change** for this port; `aistackHelp` simply lists the 69 Debian step
+functions instead of the 77 macOS ones.
 
 ## Prerequisites, and what needs root
 
@@ -145,6 +145,7 @@ them.
 |---|---|
 | **Engines** | llama.cpp *(default)*, Ollama — **no MLX-LM** (Apple Silicon only) |
 | **Coding agents** | Pi *(default)*, OpenCode, Claude Code — all three, same as macOS |
+| **Tools** | ToolUniverse — same as macOS; cache under `~/.cache/tooluniverse` |
 | **Models** | the same [ModelLists/](../ModelLists/) catalogs; `Llama.cpp/` and `Ollama/` are consumed, `MLX-LM/` is not |
 | **Monitoring** | nvtop, btop, LiteLLM — replacing macmon and Anubis OSS, which are macOS-only |
 | **Foundations** | base apt packages, uv, **Node** (an explicit step here, unlike macOS) |

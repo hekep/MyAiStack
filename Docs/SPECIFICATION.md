@@ -7,26 +7,29 @@ contract they all implement.
 ## Purpose
 
 Run capable coding models locally — on Apple Silicon macOS and on Debian/Ubuntu
-— with every choice explicit and reversible. The stack is assembled from four
+— with every choice explicit and reversible. The stack is assembled from five
 independent layers, and the user is never asked a question the machine can
 answer for itself.
 
-Alongside the layers sit **tools**: MCP connectors, model conversion, the
+Alongside the layers sit **utilities**: MCP connectors, model conversion, the
 monitoring proxy. They are invoked deliberately rather than by the install
 wizard, and are documented here because they are part of the contract even
 though nothing depends on them.
 
-## The four layers
+## The five layers
 
 | Layer | What it provides | Members |
 |---|---|---|
 | **Engine** | serves tokens over HTTP | llama.cpp *(default)*, Ollama, and MLX-LM on macOS only |
 | **Coding agent** | what you type into | Pi *(default)*, OpenCode, Claude Code |
+| **Tools** | MCP tool servers a launched model calls, optional | ToolUniverse — biomedical tools, `Tool_RAG`, `Finish` — served locally, reached through a generated plugin |
 | **Models** | weights on disk, per engine | catalogs in `ModelLists/<Engine>/<RAM>_GB_Ram.json` |
 | **Monitoring** | observability, optional | macOS: macmon, Anubis OSS, LiteLLM · Debian: nvtop, btop, LiteLLM |
 
 Layers are independent: any engine can be installed without an agent, any agent
-without models. The install wizard stops only when **no engine at all** is
+without models. A tool server without an agent is possible but pointless — only
+the generated plugin makes it reachable — which is why the installer asks about
+tools right after the agents. The install wizard stops only when **no engine at all** is
 present, because nothing below that point can mean anything.
 
 Every choice these layers offer, and what each one determines, is drawn out in
@@ -89,13 +92,16 @@ the whole reason for the shape.
 | Step | What it does |
 |---|---|
 | `aistackMcpAdd <name> --url <url>` | follows the 401 challenge to the resource metadata, then to the authorization server that actually offers registration, and registers as a public native client |
+| `aistackMcpAdd <name> --url <url> --no-auth` | records a server that needs no sign-in — a local one such as ToolUniverse. No registration, no tokens, no browser; `Login` on it simply builds |
 | `aistackMcpLogin <name>` | PKCE S256, browser consent, one-shot loopback callback, tokens to `~/.aistack/mcp/<name>/tokens.json` at 0600 |
 | `aistackMcpBuild <name>` | `tools/list`, caches the schemas, and **generates a plugin per agent** |
 | `aistackMcpCall` | one `tools/call`; what the plugins run underneath |
 
 **Login must precede build.** The tool list is per account: what a server offers
 depends on who is asking and what they were granted, so a plugin generated
-before sign-in would describe somebody else's tool surface.
+before sign-in would describe somebody else's tool surface. A no-auth connector
+has the equivalent rule: the server must be **running**, because the list still
+comes from `tools/list`.
 
 ### Credentials never enter the repo
 
@@ -205,6 +211,38 @@ counts. Diagnosing what a model was actually given is otherwise guesswork.
 Process matching is by **port**, the same rule llama-server needs: a proxy on the
 port that is not ours belongs to the user and is reported, never killed.
 
+## The tools layer
+
+A tool server is a process the launched model calls, through an MCP connector
+and the plugin generated from it. ToolUniverse is the first member: Harvard's
+biomedical tool collection with `Tool_RAG` and `Finish`, the meta-tools
+ATHENA-R1 was trained on, served locally over MCP.
+
+| | |
+|---|---|
+| port | 8765 (`TOOLUNIVERSE_PORT`) — 8080 is llama.cpp, 8000 is what ATHENA gives vLLM, 5000/7000 are macOS AirPlay |
+| flags | `--compact-mode` (`TOOLUNIVERSE_ARGS`): five discovery/execute tools, the rest loaded behind them |
+| log | `~/.aistack/tooluniverse.log` |
+| connector | `tooluniverse`, registered `--no-auth` by the install step, which starts the server just long enough to build the plugins |
+
+**Installed between the agents and the models**: the plugin needs an agent to
+be wired into, and a model is what calls it. Uninstalled after monitoring and
+before the agents — the same reason, reversed.
+
+**The launcher asks, Enter means no, nothing is remembered** — the proxy's rule,
+for the proxy's reason: this inserts a component, it does not describe the
+model. Both answers act: yes (re)starts our server, no stops one that is there.
+`KillPrevious` tears ours down before a launch regardless, as it does the
+proxy; the question after the launch is where it comes back.
+
+Measured on the reference Mac: install 34 s and 1.4 GB through `uv tool`; the
+server answers in 3–6 s at 168 MB, and start-up loads no model. `find_tools` is
+the call that loads the 5.75 GiB `ToolRAG-T1` embedder — and ToolUniverse
+chooses CUDA or CPU, never Metal, so on a Mac that is a CPU job.
+
+Process matching is by **port**, as for the proxy and llama-server: a server on
+the port that is not ours is reported, never killed.
+
 ## System prompts
 
 `SystemPrompts/<genre>.txt`, one file per genre, offered as a numbered menu
@@ -260,9 +298,9 @@ shell reveals the whole toolkit. Scripts keep plain names.
 
 | Family | Purpose | macOS | Debian |
 |---|---|---|---|
-| `aistackInstall*` | install one layer member | 18 | 17 |
-| `aistackUninstall*` | remove one layer member | 19 | 18 |
-| `aistackLaunchInference*` | serve a model, attach an agent, front it with a proxy | 20 | 14 |
+| `aistackInstall*` | install one layer member | 19 | 18 |
+| `aistackUninstall*` | remove one layer member | 20 | 19 |
+| `aistackLaunchInference*` | serve a model, attach an agent, front it with a proxy, start a tool server | 23 | 17 |
 | `aistackModelTest*` | verify one engine + model | 15 | 15 |
 | `aistackMcp*` | connect an MCP server, generate agent plugins | 11 | — |
 | `aistackConvert*` | turn upstream weights into something an engine serves | 4 | — |
@@ -315,9 +353,9 @@ the exact reverse:
 
 ```
 install:    sanity → disk gate → Homebrew
-            → engines → agents → models → monitoring → verification
+            → engines → agents → tools → models → monitoring → verification
 uninstall:  sanity → disk gate → models (GATE)
-            → monitoring → agents → engines → engine data → uv → verification
+            → monitoring → tools → agents → engines → engine data → uv → verification
 ```
 
 The uninstall **gate**: while any model remains, nothing beneath it is removed
@@ -385,6 +423,7 @@ Two deliberate refusals, both load-bearing:
 | `OLLAMA_MODELS` | which of Linux's two model stores to use | Debian |
 | `LITELLM_PORT` / `LITELLM_CONFIG` | proxy port (4000) and its generated config | macOS |
 | `AISTACK_PROXY_LOG` | where the proxy records requests | macOS |
+| `TOOLUNIVERSE_PORT` / `TOOLUNIVERSE_ARGS` / `TOOLUNIVERSE_LOG` | tool server port (8765), its flags (`--compact-mode`), its log | both |
 | `AISTACK_MCP_MAX_RECORDS` | summarise a tool result above N records; 0 (default) hands back the server's response verbatim | both |
 | `MCP_CALLBACK_PORT` | OAuth loopback port (49999) — must match what was registered | both |
 | `MLX_CONVERT_DIR` | where converted models are written (default `~/Models/mlx`) | macOS |
@@ -438,6 +477,14 @@ Hard-won, and cheap to re-break. These are the macOS-side traps; the Linux ones
   literal `$` becomes a variable and a backtick becomes command substitution.
   Both have silently corrupted a generated file that then failed to load hours
   later; generation is checked before it is reported as written.
+- **bash 3.2 under `set -u` treats an empty array expansion as an unbound
+  variable.** `"${arr[@]}"` is fine on the bash Homebrew ships and fatal on
+  `/bin/bash`; `${arr[@]+"${arr[@]}"}` works on both. It surfaced the first
+  time a script running under `-u` sourced one that never had.
+- **ToolUniverse loads its embedder inside the tool's constructor.** Starting
+  the server does not touch it; the first `find_tools` call does — a 5.75 GiB
+  download and a CPU load. A step that reports "started" must never be the one
+  that triggers a first call.
 - **`--jinja` did not improve llama.cpp tool calling here** — it produced bare
   dates where the default produced correct ISO timestamps. Measured, not
   assumed, and the launcher deliberately does not pass it.

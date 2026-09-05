@@ -21,6 +21,8 @@
 #   aistackInstallPiCodingAgent        Pi        — default YES; any engine
 #   aistackInstallOpenCodeCodingAgent  OpenCode  — default no;  any engine
 #   aistackInstallClaudeCodingAgent    Claude    — default no;  Ollama only
+#   --- tools (optional): MCP tool servers a launched model can call ---
+#   aistackInstallTooluniverseTools    ToolUniverse — default no; biomedical tools, Tool_RAG, Finish
 #   --- models, one step per engine, same order, each skipped if absent ---
 #   aistackInstallLlamacppModels  GGUF files    -> ~/Models/llama.cpp
 #   aistackInstallOllamaModels    registry tags -> ~/.ollama
@@ -1668,6 +1670,118 @@ aistackInstallOllamaModels() {
     aiStackModelMenu "Ollama" ollamaListInstalled ollamaPullModel
 }
 
+# ---------- Tools ------------------------------------------------------------
+# MCP tool servers a launched model calls through the generated agent plugins
+# (mcp.sh). They sit above the coding agents — a plugin needs an agent to be
+# wired into — and below the models, which are what call them. Optional.
+
+# True when ToolUniverse is installed (uv tool, or on PATH some other way).
+tooluniverse_installed() { command -v tooluniverse-smcp-server >/dev/null 2>&1 \
+                           || { command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^tooluniverse'; }; }
+
+# Space-separated list of tool servers present, empty when none.
+installed_tools() {
+    local t=""
+    tooluniverse_installed && t="${t} tooluniverse"
+    echo "${t# }"
+}
+
+# Same knobs the launcher uses (launchInference.sh) — a different port here
+# would register a connector the launcher never serves.
+TOOLUNIVERSE_PORT="${TOOLUNIVERSE_PORT:-8765}"
+TOOLUNIVERSE_ARGS="${TOOLUNIVERSE_ARGS:---compact-mode}"
+
+# Register ToolUniverse as the MCP connector 'tooluniverse' and build the agent
+# plugins. The build has to list the tools, so the server is started for the
+# duration and stopped again — from then on the launcher owns it. mcp.sh is
+# sourced in a subshell without -u: it is written for interactive shells.
+_aiStackToolsConnect() {
+    local root log pid code t=0 rc=0 url="http://127.0.0.1:${TOOLUNIVERSE_PORT}/mcp"
+    local mcpdir="${MCP_HOME:-$HOME/.aistack/mcp}/tooluniverse"
+    root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    log="$HOME/.aistack/tooluniverse-install.log"; mkdir -p "$HOME/.aistack"
+    if [ -f "$mcpdir/server.json" ]; then
+        ok "MCP connector 'tooluniverse' is registered ($(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["tools"]))' "$mcpdir/tools.json" 2>/dev/null || echo 0) tools listed)."
+        ask_def "Rebuild its tool list and agent plugins now?" "n" || return 0
+    else
+        echo "    The model reaches ToolUniverse through an MCP connector: a generated Pi"
+        echo "    extension (and OpenCode tools) calling the server on port ${TOOLUNIVERSE_PORT}."
+        if ! ask_def "Register ToolUniverse as MCP connector 'tooluniverse' and build the plugins?" "y"; then
+            warn "Skipped. Later:  aistackMcpAdd tooluniverse --url ${url} --no-auth"
+            return 0
+        fi
+    fi
+    if lsof -nP -iTCP:"${TOOLUNIVERSE_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+        fail "Port ${TOOLUNIVERSE_PORT} is busy — set TOOLUNIVERSE_PORT to a free one and re-run this step:"
+        lsof -nP -iTCP:"${TOOLUNIVERSE_PORT}" -sTCP:LISTEN >&2
+        return 1
+    fi
+    info "Starting ToolUniverse on ${url} for the build (${TOOLUNIVERSE_ARGS}) — log: ${log}"
+    # shellcheck disable=SC2086  # TOOLUNIVERSE_ARGS is a flag list by design
+    nohup tooluniverse-smcp-server --host 127.0.0.1 --port "${TOOLUNIVERSE_PORT}" ${TOOLUNIVERSE_ARGS} >"$log" 2>&1 </dev/null &
+    pid=$!
+    while [ "$t" -lt 180 ]; do
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url" 2>/dev/null)
+        [ -n "$code" ] && [ "$code" != "000" ] && break
+        kill -0 "$pid" 2>/dev/null || { fail "ToolUniverse exited — last lines of ${log}:"; tail -5 "$log" >&2; return 1; }
+        sleep 1; t=$((t+1))
+    done
+    if [ -z "$code" ] || [ "$code" = "000" ]; then
+        fail "ToolUniverse did not answer within ${t} s — see ${log}"; kill "$pid" 2>/dev/null; return 1
+    fi
+    ok "ToolUniverse answered after ${t} s."
+    if [ -f "$mcpdir/server.json" ]; then
+        ( set +u; . "$root/mcp.sh" && aistackMcpBuild tooluniverse ) || rc=1
+    else
+        ( set +u; . "$root/mcp.sh" && aistackMcpAdd tooluniverse --url "$url" --no-auth ) || rc=1
+    fi
+    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+    ok "ToolUniverse stopped — the launcher starts it when you say yes to it."
+    [ "$rc" -eq 0 ] || warn "Connector step failed — retry with the server running: aistackMcpBuild tooluniverse"
+    return $rc
+}
+
+# Tools step, default no: ToolUniverse — Harvard's biomedical tool server (FDA,
+# ChEMBL, Open Targets, EuropePMC, ...) with Tool_RAG and Finish, the meta-tools
+# ATHENA-R1 was trained on. Served locally over MCP; the launcher starts it on
+# request. The [embedding] extra brings sentence-transformers and faiss for
+# Tool_RAG; the 1.5B embedder itself (5.75 GiB) downloads on first use, not here.
+aistackInstallTooluniverseTools() {
+    info "aistackInstallTooluniverseTools — ToolUniverse (biomedical MCP tool server)"
+    if tooluniverse_installed; then
+        local cur latest
+        cur=$(uv tool list 2>/dev/null | awk '/^tooluniverse /{print $2}' | tr -d 'v')
+        ok "ToolUniverse present: ${cur:-unknown}"
+        latest=$(curl -sf --max-time 10 https://pypi.org/pypi/tooluniverse/json 2>/dev/null \
+                 | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])' 2>/dev/null)
+        if [ -n "$latest" ] && [ -n "$cur" ] && [ "$latest" != "$cur" ]; then
+            warn "ToolUniverse update available: ${cur} -> ${latest}"
+            ask_def "Update ToolUniverse now?" "y" && uv tool upgrade tooluniverse
+        elif [ -z "$latest" ]; then
+            ok "Update check skipped (PyPI unreachable)."
+        else
+            ok "ToolUniverse ${cur} is up to date."
+        fi
+        _aiStackToolsConnect
+        return 0
+    fi
+    echo "    A local MCP server with hundreds of biomedical tools (FDA labels, ChEMBL,"
+    echo "    Open Targets, EuropePMC, ...) plus Tool_RAG and Finish — what ATHENA-R1"
+    echo "    was trained to call. Python package via uv, a few hundred MB with its"
+    echo "    embedding libraries. The 5.75 GiB Tool_RAG embedder downloads on first use."
+    if ! ask_def "Install ToolUniverse?" "n"; then
+        warn "Skipping ToolUniverse."
+        return 0
+    fi
+    aistackInstallUv required || { fail "ToolUniverse needs uv — not installed."; return 1; }
+    if ! uv tool install "tooluniverse[embedding]"; then
+        warn "Install failed on the default Python — retrying on 3.12, where every wheel exists..."
+        uv tool install --python 3.12 "tooluniverse[embedding]" || { fail "tooluniverse install failed."; return 1; }
+    fi
+    ok "ToolUniverse installed: $(uv tool list 2>/dev/null | awk '/^tooluniverse /{print $2}')"
+    _aiStackToolsConnect
+}
+
 # ---------- Monitoring -------------------------------------------------------
 # Optional observability around the stack. Linux-specific by nature: macmon and
 # Anubis OSS are Apple-only, so their slots are filled by nvtop (the accelerator)
@@ -1775,6 +1889,9 @@ aistackInstallVerification() {
     pi_installed       && ok "Pi:        $(pi --version 2>/dev/null | head -1)"       || warn "Pi:        not installed"
     opencode_installed && ok "OpenCode:  $(opencode --version 2>/dev/null | head -1)" || warn "OpenCode:  not installed"
     claude_installed   && ok "Claude:    $(claude --version 2>/dev/null | head -1)"   || warn "Claude:    not installed (Ollama-only agent)"
+    echo "${BOLD}  Tools${RESET}"
+    tooluniverse_installed && ok "ToolUniverse: $(uv tool list 2>/dev/null | awk '/^tooluniverse /{print $2}') — MCP on port ${TOOLUNIVERSE_PORT}" \
+                           || warn "ToolUniverse: not installed"
     echo "${BOLD}  Monitoring${RESET}"
     nvtop_installed   && ok "nvtop:     $(nvtop --version 2>/dev/null | head -1)" || warn "nvtop:     not installed"
     btop_installed    && ok "btop:      $(btop --version 2>/dev/null | head -1)"  || warn "btop:      not installed"
@@ -1833,6 +1950,8 @@ aistackInstall() {
     aistackInstallPiCodingAgent
     aistackInstallOpenCodeCodingAgent
     aistackInstallClaudeCodingAgent
+    # --- tools: MCP servers the model calls; plugged into the agents above ----
+    aistackInstallTooluniverseTools
 
     # --- model layer: same order as the engines, each skipped if absent ------
     aistackInstallLlamacppModels

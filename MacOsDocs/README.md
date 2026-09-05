@@ -7,7 +7,7 @@ the script does, how it works, and why it is necessary** — the same shape as
 **If you only read two things:**
 
 - [Docs/SPECIFICATION.md](../Docs/SPECIFICATION.md) — the contract both
-  platforms implement: four layers, the naming rule, the nine invariants.
+  platforms implement: five layers, the naming rule, the nine invariants.
 - [Docs/PlatformNotes.md](../Docs/PlatformNotes.md) — what differs between
   macOS and Debian, and why. Every deviation below is explained there.
 
@@ -58,6 +58,7 @@ generic folder:
 | Prerequisites | Homebrew, uv |
 | Engines | llama.cpp (:8080), **MLX-LM (:8081)**, Ollama (:11434) |
 | Coding agents | Pi, OpenCode, Claude Code |
+| Tools | ToolUniverse — biomedical MCP tool server, cache under `~/Library/Caches/ToolUniverse` |
 | Monitoring | **macmon**, **Anubis OSS**, LiteLLM |
 
 Bold entries exist only here. **MLX-LM is Apple Silicon only** — Apple's own

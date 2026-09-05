@@ -22,6 +22,7 @@ platforms.
 |---|---|---|
 | **Engines** | llama.cpp *(default)*, Ollama, **+ MLX-LM on macOS** | At least one required. llama.cpp reaches the `Q5_K_M`/`Q6_K` quants Ollama's registry does not carry |
 | **Coding agents** | Pi *(default)*, OpenCode, Claude Code | Pi and OpenCode drive any engine; Claude Code needs Ollama, because it speaks the Anthropic API |
+| **Tools** *(optional)* | ToolUniverse | A local biomedical MCP tool server — `Tool_RAG`, `Finish` and the FDA / ChEMBL / Open Targets tools ATHENA-R1 was trained on. The model reaches it through a generated Pi plugin; the launcher starts it on request |
 | **Models** | curated top-20 per RAM tier, per engine | [ModelLists/](ModelLists/) — data, not code, with sizes read from upstream manifests. The same catalogs feed both platforms |
 | **Monitoring** *(all optional)* | macOS: macmon, Anubis OSS, LiteLLM · Debian: nvtop, btop, LiteLLM | Live hardware usage, benchmarking, and request logging with OpenTelemetry |
 
