@@ -192,7 +192,7 @@ _aiStackMcpRpc() {
             -H 'accept: application/json, text/event-stream' \
             -H "mcp-protocol-version: ${MCP_PROTOCOL}" \
             -H "authorization: Bearer ${tok}" \
-            "${extra[@]}" \
+            ${extra[@]+"${extra[@]}"} \
             -d "{\"jsonrpc\":\"2.0\",\"id\":\"${id}\",\"method\":\"${method}\",\"params\":${params}}")
         if [ "$code" = "401" ] && [ "$attempt" = "1" ]; then
             _aiStackMcpRefresh "$name" || { rm -f "$hdrs" "$body"; return 1; }
@@ -253,7 +253,7 @@ _aiStackMcpNotify() {
         -H 'accept: application/json, text/event-stream' \
         -H "mcp-protocol-version: ${MCP_PROTOCOL}" \
         -H "authorization: Bearer ${tok}" \
-        "${extra[@]}" \
+        ${extra[@]+"${extra[@]}"} \
         -d "{\"jsonrpc\":\"2.0\",\"method\":\"${method}\"}"
 }
 
