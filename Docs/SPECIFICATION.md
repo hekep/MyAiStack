@@ -548,6 +548,13 @@ Hard-won, and cheap to re-break. These are the macOS-side traps; the Linux ones
 - **The shell that runs a script matters.** zsh does not word-split
   `set -- $var`; a comparison loop written for bash silently passed
   "tu2 mps" as one argument. Run test scripts with `bash file.sh`.
+- **`mlx_lm.server` wedges for everyone when one streaming client dies behind
+  the proxy.** LiteLLM stops reading the upstream stream, the server's write
+  blocks on a full socket, and its generation lock is never released; the
+  models endpoint still answers, completions never do. Seen twice in one
+  afternoon (a killed Pi, a timed-out benchmark call). Probe with a five-token
+  completion before trusting the engine; the fix is a restart of engine and
+  proxy, which the launcher's start functions do non-interactively.
 - **`--jinja` did not improve llama.cpp tool calling here** — it produced bare
   dates where the default produced correct ISO timestamps. Measured, not
   assumed, and the launcher deliberately does not pass it.
