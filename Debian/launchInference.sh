@@ -223,6 +223,28 @@ tooluniverseKillOurs() { pkill  -f "tooluniverse-smcp-server .*--port ${TOOLUNIV
 tooluniverse_up() { local c; c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
                         "http://127.0.0.1:${TOOLUNIVERSE_PORT}/mcp" 2>/dev/null); [ -n "$c" ] && [ "$c" != "000" ]; }
 
+# One log file per launch, named by its start time, behind a stable path.
+# Args: <stable-path> <name>. Creates <dir>/logs/<YYYY-MM-DD_HH_MM_SS>_<name>,
+# points <stable-path> at it as a symlink, and prints the new file. A plain
+# file already at <stable-path> — history from before this existed — is moved
+# into logs/ under its own modification time, never overwritten. Everything
+# that reads or appends through the stable path keeps working unchanged: the
+# proxy callback, ProxyLog, the benchmark runner, and the server's own
+# stdout/stderr redirect (a redirect onto a symlink writes to its target).
+aiStackLogRotate() {
+    local stable="$1" name="$2" dir ts new old
+    dir="$(dirname "$stable")/logs"; mkdir -p "$dir"
+    if [ -f "$stable" ] && [ ! -L "$stable" ]; then
+        old=$(python3 -c 'import os,sys,time; print(time.strftime("%Y-%m-%d_%H_%M_%S", time.localtime(os.path.getmtime(sys.argv[1]))))' "$stable")
+        mv "$stable" "$dir/${old}_${name}"
+    fi
+    ts=$(date +%Y-%m-%d_%H_%M_%S)
+    new="$dir/${ts}_${name}"
+    : > "$new"
+    ln -sfn "$new" "$stable"
+    printf '%s\n' "$new"
+}
+
 # The directory Ollama stores manifests and blobs in.
 # Linux has two possible locations — the system service's /usr/share/ollama and
 # your own ~/.ollama — so every path goes through here.
@@ -928,7 +950,8 @@ aistackLaunchInferenceStartTools() {
     fi
     [ -n "$(tooluniverseOurPids)" ] && aistackLaunchInferenceStopTools
     mkdir -p "$(dirname "$TOOLUNIVERSE_LOG")"
-    info "Starting ToolUniverse on 127.0.0.1:${TOOLUNIVERSE_PORT} (${TOOLUNIVERSE_ARGS}) — log: ${TOOLUNIVERSE_LOG}"
+    local tulog; tulog=$(aiStackLogRotate "$TOOLUNIVERSE_LOG" tooluniverse.log)
+    info "Starting ToolUniverse on 127.0.0.1:${TOOLUNIVERSE_PORT} (${TOOLUNIVERSE_ARGS}) — log: ${tulog}"
     # shellcheck disable=SC2086  # TOOLUNIVERSE_ARGS is a flag list by design
     nohup tooluniverse-smcp-server --host 127.0.0.1 --port "${TOOLUNIVERSE_PORT}" ${TOOLUNIVERSE_ARGS} \
         >"$TOOLUNIVERSE_LOG" 2>&1 </dev/null &
