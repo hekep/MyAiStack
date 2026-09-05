@@ -1111,13 +1111,12 @@ except Exception: print("")' 2>/dev/null)
                 esac
             fi ;;
         MLX-LM)
-            cur=$(curl -sf --max-time 8 "http://${bind}:${port}/v1/models" 2>/dev/null | python3 -c '
-import json,sys
-try:
-    xs=(json.load(sys.stdin).get("data") or [])
-    print(xs[0].get("id","") if xs else "")
-except Exception: print("")' 2>/dev/null)
-            [ "$cur" = "$model" ] || return 1 ;;
+            # the list holds every cached model; ask for ours by name or path
+            cur=$(LAUNCH_ENDPOINT="http://${bind}:${port}" endpointModelId "$model")
+            case "$cur" in
+                "$model") ;;
+                *) [ -e "$model" ] && [ "$cur" = "$(cd "$model" 2>/dev/null && pwd -P)" ] || return 1 ;;
+            esac ;;
         *) return 1 ;;
     esac
 
@@ -1197,7 +1196,7 @@ aistackLaunchInferenceStartProxy() {
     # Ask the engine what it calls the model. llama-server and mlx_lm.server
     # each name models their own way, and the proxy has to forward an id the
     # engine will accept.
-    LAUNCH_ENDPOINT="$upstream" mid=$(endpointModelId); [ -z "$mid" ] && mid="$model"
+    LAUNCH_ENDPOINT="$upstream" mid=$(endpointModelId "$model"); [ -z "$mid" ] && mid="$model"
 
     # A proxy already on the port is only reusable if it is ours; anything else
     # is the user's and must not be touched.
@@ -1676,13 +1675,29 @@ aistackLaunchInferenceStart() {
 # Needed because llama-server and mlx_lm.server name models their own way, and
 # an agent config must use the id the server will actually accept.
 endpointModelId() {
+    # Args: [preferred-model ...]. An engine can advertise more than the model
+    # that was launched — mlx_lm.server lists every model in the HuggingFace
+    # cache, Ollama every model installed — so the first id is not "the" model.
+    # Prefer an id that names what we asked for (exactly, or as the resolved
+    # path a converted model is launched by); fall back to the first id only
+    # when nothing matches. The proxy once forwarded every request to a 4B
+    # model that happened to sort first while an 8B was the one launched.
     curl -sf --max-time 8 "${LAUNCH_ENDPOINT}/v1/models" 2>/dev/null | python3 -c '
-import json,sys
+import json, os, sys
 try:
-    d=json.load(sys.stdin)
-    xs=d.get("data") or d.get("models") or []
-    print((xs[0].get("id") or xs[0].get("name") or "") if xs else "")
-except Exception: print("")' 2>/dev/null
+    d = json.load(sys.stdin)
+    xs = d.get("data") or d.get("models") or []
+    ids = [(x.get("id") or x.get("name") or "") for x in xs]
+    want = [w for w in sys.argv[1:] if w]
+    want += [os.path.realpath(w) for w in list(want) if os.path.exists(w)]
+    hit = next((i for i in ids if i in want), None)
+    if hit is None:
+        hit = next((i for i in ids if any(i.endswith("/" + os.path.basename(w)) for w in want)), None)
+    # a stated preference that matches nothing prints nothing: the caller then
+    # uses the model name itself, which every engine here accepts as an id —
+    # better than a confident wrong answer
+    print(hit if hit is not None else ("" if want else (ids[0] if ids else "")))
+except Exception: print("")' "$@" 2>/dev/null
 }
 
 # Hand the running endpoint to the chosen coding agent.
@@ -1934,7 +1949,7 @@ aistackLaunchInferenceAgentOpenCode() {
     _requireEngine "$engine" || return 1
     _requireModel "$engine" "$model" || return 1
     endpoint=$(_resolveEndpointFor "$engine") || return 1
-    LAUNCH_ENDPOINT="$endpoint" mid=$(endpointModelId); [ -z "$mid" ] && mid="$model"
+    LAUNCH_ENDPOINT="$endpoint" mid=$(endpointModelId "$model"); [ -z "$mid" ] && mid="$model"
     mkdir -p "$(dirname "$cfg")"
     [ -f "$cfg" ] && { cp "$cfg" "${cfg}.bak"; warn "Existing OpenCode config backed up to ${cfg}.bak"; }
     python3 - "$cfg" "$endpoint" "$mid" "$engine" <<'PYEOF'

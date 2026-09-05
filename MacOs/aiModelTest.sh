@@ -171,9 +171,10 @@ aistackModelTestEnsureServing() {
         MLX-LM)
             local cur2
             if engine_up MLX-LM "$host"; then
+                # mlx_lm.server lists every cached model — look for ours, not the first
                 cur2=$(curl -sf --max-time 5 "${TEST_ENDPOINT}/v1/models" 2>/dev/null \
-                       | python3 -c 'import json,sys;d=json.load(sys.stdin);xs=d.get("data") or d.get("models") or [];print((xs[0].get("id") or xs[0].get("name") or "") if xs else "")' 2>/dev/null)
-                [ "$cur2" = "$model" ] && return 0
+                       | python3 -c 'import json,os,sys;d=json.load(sys.stdin);xs=d.get("data") or d.get("models") or [];ids=[(x.get("id") or x.get("name") or "") for x in xs];w=sys.argv[1];rp=os.path.realpath(w) if os.path.exists(w) else w;print(next((i for i in ids if i in (w,rp)),ids[0] if ids else ""))' "$model" 2>/dev/null)
+                [ "$cur2" = "$model" ] || { [ -e "$model" ] && [ "$cur2" = "$(cd "$model" 2>/dev/null && pwd -P)" ]; } && return 0
                 warn "mlx_lm.server is serving ${cur2:-something else} — restarting it."
                 pkill -f "mlx_lm.server" 2>/dev/null; sleep 2
             fi
